@@ -1,5 +1,5 @@
 const API_BASE_URL = (
-  import.meta.env?.VITE_JIOSAAVN_API_URL || 'http://localhost:3000'
+  import.meta.env?.VITE_API_BASE_URL || '/api'
 ).replace(/\/$/, '')
 
 const SUPPORTED_PROVIDERS = new Set(['jiosaavn'])
