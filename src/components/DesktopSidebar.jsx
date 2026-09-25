@@ -7,6 +7,9 @@ import {
   LogOut,
 } from 'lucide-react'
 
+import { supabase } from '../services/supabase'
+import logo from '../assets/logo.png'
+
 const navItems = [
   { id: 'Home', icon: Home, label: 'Home' },
   { id: 'Browse', icon: Compass, label: 'Browse' },
@@ -14,17 +17,15 @@ const navItems = [
   { id: 'Library', icon: Library, label: 'Library' },
 ]
 
-function BrandMark() {
-  return (
-    <div
-      className="relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-[#7567F8]/25 bg-[#7567F8]/10"
-      aria-hidden="true"
-    >
-      <div className="absolute left-[13px] top-[10px] h-6 w-[3px] rotate-[28deg] rounded-full bg-[#8B83FF]" />
-      <div className="absolute left-[22px] top-[10px] h-6 w-[3px] -rotate-[28deg] rounded-full bg-[#7567F8]" />
-      <div className="absolute bottom-[9px] left-[17px] h-[3px] w-[10px] rounded-full bg-[#7567F8]" />
-    </div>
-  )
+
+function getInitial(name = '') {
+  const value = String(name).trim()
+
+  if (!value) {
+    return 'U'
+  }
+
+  return value.charAt(0).toUpperCase()
 }
 
 function DesktopSidebar({
@@ -33,6 +34,9 @@ function DesktopSidebar({
   playlists = [],
   selectedPlaylist = null,
   onSelectPlaylist,
+  profileName = '',
+  user = null,
+  onSignOut,
 }) {
   const handlePlaylistClick = (playlist) => {
     if (!playlist?.id) return
@@ -40,11 +44,62 @@ function DesktopSidebar({
     onSelectPlaylist?.(playlist)
   }
 
+  const handleSignOut = async () => {
+    console.log('1. SIDEBAR SIGN OUT CLICKED')
+
+    try {
+      if (typeof onSignOut === 'function') {
+        console.log('2. CALLING APP SIGN OUT HANDLER')
+
+        await onSignOut()
+
+        console.log('3. APP SIGN OUT HANDLER FINISHED')
+        return
+      }
+
+      console.log(
+        '2. APP SIGN OUT HANDLER NOT PROVIDED — USING SUPABASE FALLBACK',
+      )
+
+      const { error } = await supabase.auth.signOut()
+
+      console.log('3. SUPABASE SIGN OUT RESULT:', error)
+
+      if (error) {
+        console.error(
+          '4. SUPABASE SIGN OUT FAILED:',
+          error,
+        )
+        return
+      }
+
+      console.log('5. SUPABASE SIGN OUT SUCCESS')
+
+      window.location.reload()
+    } catch (error) {
+      console.error('SIGN OUT EXCEPTION:', error)
+    }
+  }
+
+  const displayName =
+    profileName ||
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.user_metadata?.user_name ||
+    user?.email?.split('@')[0] ||
+    'User'
+
+  const accountEmail = user?.email || 'Signed in'
+
   return (
     <aside className="hidden min-h-screen w-[260px] border-r border-white/[0.06] bg-[#08090B] px-5 py-7 lg:flex lg:flex-col">
       {/* Brand */}
       <div className="mb-9 flex items-center gap-3">
-        <BrandMark />
+        <img
+        src={logo}
+        alt="AURAAN"
+        className="h-11 w-11 shrink-0 rounded-2xl object-contain"
+      />
 
         <div>
           <h2 className="text-xl font-semibold tracking-[-0.03em] text-white">
@@ -59,7 +114,7 @@ function DesktopSidebar({
           <button
             key={id}
             type="button"
-            onClick={() => onSelectTab(id)}
+            onClick={() => onSelectTab?.(id)}
             aria-current={
               activeTab === id ? 'page' : undefined
             }
@@ -73,6 +128,7 @@ function DesktopSidebar({
               size={18}
               strokeWidth={activeTab === id ? 2 : 1.8}
             />
+
             {label}
           </button>
         ))}
@@ -83,6 +139,7 @@ function DesktopSidebar({
         <p className="text-[10px] font-medium uppercase tracking-[0.26em]">
           Your music
         </p>
+
         <Music2 size={14} />
       </div>
 
@@ -142,32 +199,37 @@ function DesktopSidebar({
       ) : (
         <div className="mt-4 rounded-xl border border-dashed border-white/[0.07] bg-white/[0.015] px-3 py-4">
           <p className="text-xs leading-5 text-white/35">
-            Your saved music and playlists
-            will appear here.
+            Your saved music and playlists will
+            appear here.
           </p>
         </div>
       )}
 
       {/* Account */}
-      <div className="mt-auto rounded-2xl border border-white/[0.07] bg-[#101114] p-3">
+      <div className="relative z-50 mt-auto rounded-2xl border border-white/[0.07] bg-[#101114] p-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[#7567F8]/20 bg-[#7567F8]/10 text-sm font-semibold text-[#A9A4FF]">
-            A
+          {/* User avatar */}
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#7567F8]/20 bg-[#7567F8]/10 text-sm font-semibold text-[#A9A4FF]">
+            {getInitial(displayName)}
           </div>
 
-          <div className="min-w-0">
+          {/* User information */}
+          <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-white">
-              Guest
+              {displayName}
             </p>
-            <p className="text-xs text-white/35">
-              Local session
+
+            <p className="truncate text-xs text-white/35">
+              {accountEmail}
             </p>
           </div>
         </div>
 
+        {/* Sign out */}
         <button
           type="button"
-          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-sm text-white/50 transition hover:bg-white/[0.06] hover:text-white"
+          onClick={handleSignOut}
+          className="relative z-50 mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-sm text-white/50 transition hover:border-red-400/20 hover:bg-red-400/[0.06] hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7567F8]/60"
         >
           <LogOut size={16} />
           Sign out

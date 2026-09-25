@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import AuthScreen from './components/auth/AuthScreen'
+import { supabase } from './services/supabase'
+
+
 import {
   ArrowLeft,
   Heart,
@@ -42,11 +46,9 @@ import {
   readRecentlyPlayed,
 } from './utils/recentlyPlayed'
 
-import {
-  clearFavorites,
-  readFavorites,
-  toggleFavorite,
-} from './utils/favorites'
+// Favorites are persisted per authenticated user in Supabase.
+// The `liked_songs` table is protected by RLS, so these queries only
+// read/write the currently signed-in user's rows.
 
 const DEFAULT_PROVIDER = 'jiosaavn'
 const SEARCH_PAGE_SIZE = 10
@@ -129,8 +131,78 @@ function formatTime(value) {
     .padStart(2, '0')}`
 }
 
+const likedSongFromRow = (row) => ({
+  id: String(row.song_id),
+  provider: row.provider || DEFAULT_PROVIDER,
+  title: row.title || 'Unknown title',
+  artist: row.artist || 'Unknown artist',
+  album: row.album || null,
+  artwork: row.artwork || null,
+  duration: Number(row.duration) || 0,
+  streamUrl: row.stream_url || null,
+  url: row.song_url || null,
+  year: row.year || null,
+  language: row.language || null,
+  explicitContent: Boolean(row.explicit_content),
+  playable: Boolean(row.stream_url),
+})
+
+const favoriteRowFromTrack = (track, userId) => ({
+  user_id: userId,
+  song_id: String(track.id),
+  provider: track.provider || DEFAULT_PROVIDER,
+  title: track.title || 'Unknown title',
+  artist: track.artist || null,
+  album: track.album || null,
+  artwork: track.artwork || null,
+  duration:
+    Number(track.durationSeconds ?? track.duration) || 0,
+  stream_url: track.streamUrl || null,
+  song_url: track.url || null,
+  year: track.year || null,
+  language: track.language || null,
+  explicit_content: Boolean(track.explicitContent),
+})
+
+const historySongFromRow = (row) => ({
+  id: String(row.song_id),
+  provider: row.provider || DEFAULT_PROVIDER,
+  title: row.title || 'Unknown title',
+  artist: row.artist || 'Unknown artist',
+  album: row.album || null,
+  artwork: row.artwork || null,
+  duration: Number(row.duration) || 0,
+  streamUrl: row.stream_url || null,
+  url: row.song_url || null,
+  year: row.year || null,
+  language: row.language || null,
+  explicitContent: Boolean(row.explicit_content),
+  playable: Boolean(row.stream_url),
+  playedAt: row.played_at || null,
+})
+
+const historyRowFromTrack = (track, userId) => ({
+  user_id: userId,
+  song_id: String(track.id),
+  provider: track.provider || DEFAULT_PROVIDER,
+  title: track.title || 'Unknown title',
+  artist: track.artist || null,
+  album: track.album || null,
+  artwork: track.artwork || null,
+  duration:
+    Number(track.durationSeconds ?? track.duration) || 0,
+  stream_url: track.streamUrl || null,
+  song_url: track.url || null,
+  year: track.year || null,
+  language: track.language || null,
+  explicit_content: Boolean(track.explicitContent),
+})
+
+
 function App() {
   const [activeTab, setActiveTab] = useState('Home')
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
 
   /*
    * Currently opened playlist from the sidebar/library.
@@ -163,21 +235,15 @@ function App() {
   const [hasMoreResults, setHasMoreResults] =
     useState(false)
 
-  const [recentlyPlayed, setRecentlyPlayed] =
-    useState(() =>
-      readRecentlyPlayed().map(toUiSong),
-    )
+  const [recentlyPlayed, setRecentlyPlayed] = useState([])
+  const [listeningHistory, setListeningHistory] = useState([])
 
-  const [favorites, setFavorites] = useState(() =>
-    readFavorites().map(toUiSong),
-  )
+  const [favorites, setFavorites] = useState([])
 
   /*
    * Persistent playlists
    */
-  const [playlists, setPlaylists] = useState(() =>
-    readPlaylists(),
-  )
+  const [playlists, setPlaylists] = useState([])
 
   /*
    * Playlist modal
@@ -202,6 +268,7 @@ function App() {
   const searchRequestIdRef = useRef(0)
   const lastSearchQueryRef = useRef('')
   const lastRecordedTrackRef = useRef('')
+  const lastRecordedHistoryRef = useRef('')
   const searchInputRef = useRef(null)
 
   const {
@@ -223,7 +290,13 @@ function App() {
     playingTrack || recentlyPlayed[0] || null
 
   /*
-   * Record only real playable tracks in recently played.
+   * Record a real playable track when it actually starts playing.
+   *
+   * Recently Played and Supabase Listening History are deliberately
+   * tracked separately. This is important because the authenticated
+   * user can finish loading after playback has already started. The old
+   * implementation marked the track as recorded before checking user.id,
+   * which meant the later authenticated render skipped the Supabase insert.
    */
   useEffect(() => {
     if (
@@ -236,20 +309,260 @@ function App() {
 
     const key = trackKey(playingTrack)
 
-    if (lastRecordedTrackRef.current === key) {
+    // Keep the existing local Recently Played behaviour.
+    if (lastRecordedTrackRef.current !== key) {
+      lastRecordedTrackRef.current = key
+
+      setRecentlyPlayed(
+        addRecentlyPlayed(playingTrack).map(toUiSong),
+      )
+    }
+
+    // Supabase history must wait until the authenticated user exists.
+    // Do NOT mark the track as history-recorded before this check.
+    if (!user?.id || !playingTrack.id || !playingTrack.provider) {
       return
     }
 
-    lastRecordedTrackRef.current = key
+    const historyKey = `${user.id}:${key}`
 
-    setRecentlyPlayed(
-      addRecentlyPlayed(playingTrack).map(toUiSong),
-    )
-  }, [playingTrack, isPlaying])
+    if (lastRecordedHistoryRef.current === historyKey) {
+      return
+    }
+
+    // Mark it as pending so rapid renders cannot create duplicate rows.
+    lastRecordedHistoryRef.current = historyKey
+
+    const saveListeningHistory = async () => {
+      const row = historyRowFromTrack(playingTrack, user.id)
+
+      console.log('HISTORY: attempting insert', row)
+
+      const { data, error } = await supabase
+        .from('listening_history')
+        .insert(row)
+        .select(
+          'id, song_id, provider, title, artist, album, artwork, duration, stream_url, song_url, year, language, explicit_content, played_at',
+        )
+        .maybeSingle()
+
+      console.log(
+        'HISTORY: Supabase response',
+        JSON.stringify({ data, error }, null, 2),
+      )
+
+      if (error) {
+        console.error(
+          'Failed to save listening history:',
+          JSON.stringify(error, null, 2),
+        )
+
+        // Allow a retry if the database operation failed.
+        if (lastRecordedHistoryRef.current === historyKey) {
+          lastRecordedHistoryRef.current = ''
+        }
+
+        return
+      }
+
+      if (data) {
+        setListeningHistory((current) => {
+          const nextSong = toUiSong(historySongFromRow(data))
+
+          return [
+            nextSong,
+            ...current.filter(
+              (item) => item.id !== nextSong.id || item.provider !== nextSong.provider,
+            ),
+          ]
+        })
+      } else {
+        // The insert succeeded, but no row was returned. Keep the
+        // authenticated history marker so we don't duplicate the row.
+        console.log('HISTORY: insert succeeded without returned row')
+      }
+    }
+
+    void saveListeningHistory()
+  }, [playingTrack, isPlaying, user?.id])
 
   /*
-   * Focus Browse search input.
+   * Authentication / session
+   *
+   * AuthScreen handles email/password and Google sign-in.
+   * This component owns the session so the existing music UI only
+   * renders after Supabase confirms that a user is authenticated.
    */
+  useEffect(() => {
+    let mounted = true
+
+    const loadSession = async () => {
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession()
+
+      if (!mounted) return
+
+      if (error) {
+        console.error('Supabase session error:', error)
+      }
+
+      setUser(session?.user ?? null)
+      setAuthLoading(false)
+    }
+
+    void loadSession()
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null)
+        setAuthLoading(false)
+      },
+    )
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  /*
+   * Load authenticated user's music state.
+   *
+   * Recently played and playlists are still local for now.
+   * Liked songs are now persisted in Supabase per user.
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    const loadUserMusicState = async () => {
+      if (!user) {
+        setRecentlyPlayed([])
+        setListeningHistory([])
+        setFavorites([])
+        setPlaylists([])
+        setSelectedPlaylist(null)
+        return
+      }
+
+      setRecentlyPlayed(readRecentlyPlayed().map(toUiSong))
+      setPlaylists(readPlaylists())
+
+      const { data: historyData, error: historyError } =
+        await supabase
+          .from('listening_history')
+          .select(
+            'id, song_id, provider, title, artist, album, artwork, duration, stream_url, song_url, year, language, explicit_content, played_at',
+          )
+          .eq('user_id', user.id)
+          .order('played_at', { ascending: false })
+          .limit(100)
+
+      if (cancelled) return
+
+      if (historyError) {
+      console.error(
+        'FAILED TO LOAD LISTENING HISTORY:',
+        JSON.stringify(historyError, null, 2),
+      )
+
+      console.error('HISTORY USER ID:', user.id)
+
+      setListeningHistory([])
+    } else {
+        setListeningHistory(
+          (historyData || [])
+            .map(historySongFromRow)
+            .map(toUiSong),
+        )
+      }
+
+      const { data, error } = await supabase
+        .from('liked_songs')
+        .select(
+          'song_id, provider, title, artist, album, artwork, duration, stream_url, song_url, year, language, explicit_content, created_at',
+        )
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+
+      if (cancelled) return
+
+      if (error) {
+        console.error(
+          'FAILED TO LOAD LIKED SONGS:',
+          JSON.stringify(error, null, 2),
+        )
+
+        console.error('LIKED SONGS USER ID:', user.id)
+
+        setFavorites([])
+        return
+      }
+
+      setFavorites(
+        (data || [])
+          .map(likedSongFromRow)
+          .map(toUiSong),
+      )
+    }
+
+    void loadUserMusicState()
+
+    return () => {
+      cancelled = true
+    }
+  }, [user?.id])
+
+  const handleSignOut = async () => {
+  try {
+    const { error } = await supabase.auth.signOut()
+
+    if (error) {
+      console.error('Supabase sign out failed:', error)
+      return
+    }
+
+    // Immediately clear the local authenticated state.
+    // onAuthStateChange will also receive SIGNED_OUT.
+    setUser(null)
+
+    // Reset app state.
+    setActiveTab('Home')
+    setSelectedPlaylist(null)
+    setSearchText('')
+    setSearchResults([])
+    setSearchStatus('idle')
+    setSearchError('')
+    setSubmittedQuery('')
+    setIsLoadingMore(false)
+    setLoadMoreError('')
+    setHasMoreResults(false)
+    setRecentlyPlayed([])
+    setListeningHistory([])
+    setFavorites([])
+    setPlaylists([])
+    setPlaylistModal({
+      open: false,
+      mode: null,
+      song: null,
+    })
+    setPlaylistName('')
+    setPlaylistError('')
+    setQueueOpen(false)
+    setIsLyricsOpen(false)
+  } catch (error) {
+    console.error('Sign out failed:', error)
+  }
+}
+
+  const profileName =
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.email?.split('@')[0] ||
+    'User'
   useEffect(() => {
     if (activeTab !== 'Browse') return
 
@@ -264,6 +577,8 @@ function App() {
    * Keep playlist state synchronized with local storage.
    */
   useEffect(() => {
+    if (!user) return undefined
+
     const handleStorage = () => {
       setPlaylists(readPlaylists())
     }
@@ -523,13 +838,81 @@ function App() {
 
   /*
    * Favorites
+   *
+   * Likes are now user-specific and stored in Supabase.
+   * The UI updates optimistically and rolls back if the database
+   * operation fails.
    */
-  const handleToggleFavorite = (track) => {
-    if (!track?.provider) return
+  const handleToggleFavorite = async (track) => {
+    if (!user?.id || !track?.id || !track?.provider) return
 
-    setFavorites(
-      toggleFavorite(track).map(toUiSong),
+    const alreadyFavorite = favorites.some((favoriteTrack) =>
+      sameTrack(favoriteTrack, track),
     )
+
+    if (alreadyFavorite) {
+      const previousFavorites = favorites
+
+      setFavorites((current) =>
+        current.filter(
+          (favoriteTrack) =>
+            !sameTrack(favoriteTrack, track),
+        ),
+      )
+
+      const { error } = await supabase
+        .from('liked_songs')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('song_id', String(track.id))
+        .eq('provider', track.provider)
+
+      if (error) {
+        console.error('Failed to remove liked song:', error)
+        setFavorites(previousFavorites)
+      }
+
+      return
+    }
+
+    const previousFavorites = favorites
+    const nextFavorite = toUiSong(track)
+
+    setFavorites((current) => [
+      nextFavorite,
+      ...current.filter(
+        (favoriteTrack) =>
+          !sameTrack(favoriteTrack, nextFavorite),
+      ),
+    ])
+
+    const { error } = await supabase
+      .from('liked_songs')
+      .insert(
+  favoriteRowFromTrack(track, user.id),
+)
+
+    if (error) {
+      console.error('Failed to save liked song:', error)
+      setFavorites(previousFavorites)
+    }
+  }
+
+  const handleClearFavorites = async () => {
+    if (!user?.id || !favorites.length) return
+
+    const previousFavorites = favorites
+    setFavorites([])
+
+    const { error } = await supabase
+      .from('liked_songs')
+      .delete()
+      .eq('user_id', user.id)
+
+    if (error) {
+      console.error('Failed to clear liked songs:', error)
+      setFavorites(previousFavorites)
+    }
   }
 
   const favoriteProps = (track) => ({
@@ -540,6 +923,26 @@ function App() {
     onToggleFavorite:
       handleToggleFavorite,
   })
+
+  const handleClearListeningHistory = async () => {
+    if (!user?.id || !listeningHistory.length) return
+
+    const previousHistory = listeningHistory
+    setListeningHistory([])
+
+    const { error } = await supabase
+      .from('listening_history')
+      .delete()
+      .eq('user_id', user.id)
+
+    if (error) {
+      console.error(
+        'Failed to clear listening history:',
+        error,
+      )
+      setListeningHistory(previousHistory)
+    }
+  }
 
   /*
    * Navigation
@@ -1253,17 +1656,24 @@ function App() {
         )}
       </section>
 
-      {/* RECENTLY PLAYED */}
+      {/* LISTENING HISTORY */}
       <section className="space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <SectionHeader title="Recently played" />
+          <div>
+            <SectionHeader title="Listening history" />
+            <p className="mt-1 text-xs text-white/35">
+              {listeningHistory.length}{' '}
+              {listeningHistory.length === 1
+                ? 'play'
+                : 'plays'}
+            </p>
+          </div>
 
-          {recentlyPlayed.length ? (
+          {listeningHistory.length ? (
             <button
               type="button"
               onClick={() => {
-                clearRecentlyPlayed()
-                setRecentlyPlayed([])
+                void handleClearListeningHistory()
               }}
               className="min-h-11 px-2 text-xs uppercase tracking-[0.16em] text-white/45 transition hover:text-white/80"
             >
@@ -1272,47 +1682,32 @@ function App() {
           ) : null}
         </div>
 
-        {recentlyPlayed.length ? (
+        {listeningHistory.length ? (
           <div className="space-y-2">
-            {recentlyPlayed.map(
-              (song, index) => (
-                <SongRow
-                  key={`${song.provider}-${song.id}`}
-                  song={song}
-                  number={index + 1}
-                  onOpenPlayer={(track) =>
-                    handleOpenPlayer(track, [
-                      track,
-                    ])
-                  }
-                  onMoreOptions={
-                    handleSongMoreOptions
-                  }
-                  isActive={sameTrack(
-                    song,
-                    currentSong,
-                  )}
-                  isLoading={
-                    playerLoading &&
-                    sameTrack(
-                      song,
-                      currentSong,
-                    )
-                  }
-                  isPlaying={isPlaying}
-                  error={
-                    playerError &&
-                    sameTrack(
-                      song,
-                      currentSong,
-                    )
-                      ? playerError
-                      : ''
-                  }
-                  {...favoriteProps(song)}
-                />
-              ),
-            )}
+            {listeningHistory.map((song, index) => (
+              <SongRow
+                key={`${song.provider}-${song.id}-${index}`}
+                song={song}
+                number={index + 1}
+                onOpenPlayer={(track) =>
+                  handleOpenPlayer(track, [track])
+                }
+                onMoreOptions={handleSongMoreOptions}
+                isActive={sameTrack(song, currentSong)}
+                isLoading={
+                  playerLoading &&
+                  sameTrack(song, currentSong)
+                }
+                isPlaying={isPlaying}
+                error={
+                  playerError &&
+                  sameTrack(song, currentSong)
+                    ? playerError
+                    : ''
+                }
+                {...favoriteProps(song)}
+              />
+            ))}
           </div>
         ) : (
           <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-8 text-center">
@@ -1322,9 +1717,7 @@ function App() {
 
             <button
               type="button"
-              onClick={() =>
-                handleSelectTab('Browse')
-              }
+              onClick={() => handleSelectTab('Browse')}
               className="mt-4 min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.08]"
             >
               Browse music
@@ -1351,8 +1744,7 @@ function App() {
             <button
               type="button"
               onClick={() => {
-                clearFavorites()
-                setFavorites([])
+                void handleClearFavorites()
               }}
               className="min-h-11 px-2 text-xs uppercase tracking-[0.16em] text-white/45 transition hover:text-white/80"
             >
@@ -2212,6 +2604,21 @@ function App() {
     return renderHomeScreen()
   }
 
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#08090b] text-white">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/15 border-t-white" />
+          <p className="text-sm text-white/45">Loading your account...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <AuthScreen />
+  }
+
   return (
     <div className="min-h-screen bg-[#08090b] text-white selection:bg-white/15 selection:text-white">
       <div className="mx-auto flex min-h-screen max-w-[1500px]">
@@ -2227,9 +2634,12 @@ function App() {
               handleSelectTab(tab)
             }
           }}
-          playlists={playlists}
-          selectedPlaylist={selectedPlaylist}
-          onSelectPlaylist={openPlaylist}
+            playlists={playlists}
+            selectedPlaylist={selectedPlaylist}
+            onSelectPlaylist={openPlaylist}
+            profileName={profileName}
+            user={user}
+            onSignOut={handleSignOut}
         />
 
         <main className="relative min-w-0 flex-1 overflow-hidden bg-[#090a0c]">
@@ -2237,7 +2647,7 @@ function App() {
             title={activeTab}
             searchValue={searchText}
             onOpenSearch={handleOpenSearch}
-            profileName=""
+            profileName={profileName}
           />
 
           <div className="tab-screen px-4 pb-32 pt-5 sm:px-6 lg:px-10">

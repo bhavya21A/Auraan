@@ -1,101 +1,278 @@
-const STORAGE_KEY = 'music_favorites'
-const STORAGE_VERSION = 1
+import { supabase } from '../services/supabase'
+
 const MAX_ITEMS = 100
 
-const getStorage = () => {
-  try {
-    return globalThis.localStorage
-  } catch {
+const sanitizeTrack = (track) => {
+  if (
+    !track ||
+    track.id == null ||
+    !track.provider
+  ) {
     return null
   }
-}
 
-const sanitizeTrack = (track) => {
-  if (!track || typeof track.id !== 'string' || !track.provider) return null
-
-  const duration = Number(track.durationSeconds ?? track.duration)
+  const duration = Number(
+    track.durationSeconds ?? track.duration,
+  )
 
   return {
-    id: track.id,
-    provider: track.provider,
+    id: String(track.id),
+    provider: String(track.provider),
     title: track.title || 'Unknown title',
-    artist: track.artist || 'Unknown artist',
+    artist: track.artist || null,
     album: track.album || null,
     artwork: track.artwork || null,
-    duration: Number.isFinite(duration) && duration >= 0 ? duration : 0,
+    duration:
+      Number.isFinite(duration) && duration >= 0
+        ? duration
+        : 0,
     playable: track.playable !== false,
+    streamUrl: track.streamUrl || null,
+    url: track.url || null,
+    year:
+      track.year != null
+        ? String(track.year)
+        : null,
+    language: track.language || null,
+    explicitContent: Boolean(
+      track.explicitContent,
+    ),
   }
 }
 
-const sameFavorite = (left, right) => left.provider === right.provider && left.id === right.id
+const rowToTrack = (row) => {
+  if (!row) return null
 
-const dedupe = (items) => items.filter((item, index, allItems) => (
-  allItems.findIndex((candidate) => sameFavorite(candidate, item)) === index
-))
+  return {
+    id: String(row.song_id),
+    provider: row.provider || 'jiosaavn',
+    title: row.title || 'Unknown title',
+    artist: row.artist || null,
+    album: row.album || null,
+    artwork: row.artwork || null,
+    duration: Number(row.duration) || 0,
+    playable:
+      row.playable !== false,
+    streamUrl: row.stream_url || null,
+    url: row.song_url || null,
+    year: row.year || null,
+    language: row.language || null,
+    explicitContent:
+      Boolean(row.explicit_content),
+  }
+}
 
-export const readFavorites = () => {
-  const storage = getStorage()
-  if (!storage) return []
+const sameFavorite = (left, right) =>
+  left?.provider === right?.provider &&
+  String(left?.id) === String(right?.id)
 
-  try {
-    const parsed = JSON.parse(storage.getItem(STORAGE_KEY) || '')
-    if (parsed?.version !== STORAGE_VERSION || !Array.isArray(parsed.items)) return []
-    return dedupe(parsed.items.map(sanitizeTrack).filter(Boolean)).slice(0, MAX_ITEMS)
-  } catch {
+export const readFavorites = async () => {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError || !user) {
     return []
   }
-}
 
-export const isFavorite = (track) => {
-  const item = sanitizeTrack(track)
-  return Boolean(item && readFavorites().some((favorite) => sameFavorite(favorite, item)))
-}
+  const { data, error } = await supabase
+    .from('liked_songs')
+    .select(
+      `
+        id,
+        user_id,
+        song_id,
+        provider,
+        title,
+        artist,
+        album,
+        artwork,
+        duration,
+        stream_url,
+        song_url,
+        year,
+        language,
+        explicit_content,
+        created_at
+      `,
+    )
+    .eq('user_id', user.id)
+    .order('created_at', {
+      ascending: false,
+    })
+    .limit(MAX_ITEMS)
 
-export const addFavorite = (track) => {
-  const item = sanitizeTrack(track)
-  if (!item) return readFavorites()
-
-  const items = [item, ...readFavorites().filter((favorite) => !sameFavorite(favorite, item))].slice(0, MAX_ITEMS)
-  const storage = getStorage()
-
-  if (storage) {
-    try {
-      storage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, items }))
-    } catch {
-      // Storage may be unavailable or full; playback must continue normally.
-    }
+  if (error) {
+    console.error(
+      'Failed to load liked songs:',
+      error,
+    )
+    return []
   }
 
-  return items
+  return (data || [])
+    .map(rowToTrack)
+    .filter(Boolean)
 }
 
-export const removeFavorite = (track) => {
+export const isFavorite = async (track) => {
   const item = sanitizeTrack(track)
-  const items = item ? readFavorites().filter((favorite) => !sameFavorite(favorite, item)) : readFavorites()
-  const storage = getStorage()
 
-  if (storage) {
-    try {
-      storage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, items }))
-    } catch {
-      // Ignore storage failures so unfavoriting never interrupts playback.
-    }
+  if (!item) {
+    return false
   }
 
-  return items
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError || !user) {
+    return false
+  }
+
+  const { data, error } = await supabase
+    .from('liked_songs')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('provider', item.provider)
+    .eq('song_id', item.id)
+    .maybeSingle()
+
+  if (error) {
+    console.error(
+      'Failed to check liked song:',
+      error,
+    )
+    return false
+  }
+
+  return Boolean(data)
 }
 
-export const toggleFavorite = (track) => (isFavorite(track) ? removeFavorite(track) : addFavorite(track))
+export const addFavorite = async (track) => {
+  const item = sanitizeTrack(track)
 
-export const clearFavorites = () => {
-  const storage = getStorage()
-  if (!storage) return
+  if (!item) {
+    return readFavorites()
+  }
 
-  try {
-    storage.removeItem(STORAGE_KEY)
-  } catch {
-    // Ignore storage failures so clearing never interrupts playback.
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError || !user) {
+    console.warn(
+      'Cannot like song without an authenticated user.',
+    )
+
+    return readFavorites()
+  }
+
+  const { error } = await supabase
+    .from('liked_songs')
+    .upsert(
+      {
+        user_id: user.id,
+        song_id: item.id,
+        provider: item.provider,
+        title: item.title,
+        artist: item.artist,
+        album: item.album,
+        artwork: item.artwork,
+        duration: item.duration,
+        stream_url: item.streamUrl,
+        song_url: item.url,
+        year: item.year,
+        language: item.language,
+        explicit_content: item.explicitContent,
+      },
+      {
+        onConflict:
+          'user_id,provider,song_id',
+        ignoreDuplicates: true,
+      },
+    )
+
+  if (error) {
+    console.error(
+      'Failed to like song:',
+      error,
+    )
+
+    return readFavorites()
+  }
+
+  return readFavorites()
+}
+
+export const removeFavorite = async (track) => {
+  const item = sanitizeTrack(track)
+
+  if (!item) {
+    return readFavorites()
+  }
+
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError || !user) {
+    return readFavorites()
+  }
+
+  const { error } = await supabase
+    .from('liked_songs')
+    .delete()
+    .eq('user_id', user.id)
+    .eq('provider', item.provider)
+    .eq('song_id', item.id)
+
+  if (error) {
+    console.error(
+      'Failed to unlike song:',
+      error,
+    )
+  }
+
+  return readFavorites()
+}
+
+export const toggleFavorite = async (track) => {
+  const currentlyFavorite =
+    await isFavorite(track)
+
+  if (currentlyFavorite) {
+    return removeFavorite(track)
+  }
+
+  return addFavorite(track)
+}
+
+export const clearFavorites = async () => {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser()
+
+  if (userError || !user) {
+    return
+  }
+
+  const { error } = await supabase
+    .from('liked_songs')
+    .delete()
+    .eq('user_id', user.id)
+
+  if (error) {
+    console.error(
+      'Failed to clear liked songs:',
+      error,
+    )
   }
 }
 
-export { MAX_ITEMS, STORAGE_KEY }
+export { MAX_ITEMS }
