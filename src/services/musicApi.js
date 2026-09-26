@@ -150,6 +150,40 @@ const normalizeSong = (song) => {
   }
 }
 
+const normalizeAlbum = (album) => {
+  if (!album || typeof album !== 'object') {
+    throw new MusicApiError('JioSaavn returned an invalid album', {
+      code: 'INVALID_ALBUM',
+    })
+  }
+
+  const id = album.id != null ? String(album.id) : ''
+  const title = album.title != null ? String(album.title) : ''
+
+  if (!id || !title) {
+    throw new MusicApiError('JioSaavn returned an invalid album', {
+      code: 'INVALID_ALBUM',
+    })
+  }
+
+  return {
+    id,
+    provider: 'jiosaavn',
+    title,
+    artist: album.artist || 'Unknown artist',
+    artwork: getImage(album.image),
+    url: album.url || null,
+    type: album.type || 'album',
+    description: album.description || null,
+    year: album.year ? Number(album.year) : null,
+    language: album.language || null,
+    songIds: Array.isArray(album.songIds) ? album.songIds : [],
+  }
+}
+
+/**
+ * Search songs
+ */
 export const searchMusic = async (
   query,
   provider = 'jiosaavn',
@@ -171,6 +205,10 @@ export const searchMusic = async (
     params.set('limit', String(options.limit))
   }
 
+  if (options.page !== undefined) {
+    params.set('page', String(options.page))
+  }
+
   const payload = await request(
     `/api/search/songs?${params.toString()}`,
   )
@@ -182,7 +220,7 @@ export const searchMusic = async (
     !Array.isArray(payload.data.results)
   ) {
     throw new MusicApiError(
-      'JioSaavn returned invalid search results',
+      'JioSaavn returned invalid song search results',
       {
         code: 'INVALID_SEARCH_RESPONSE',
       },
@@ -196,6 +234,110 @@ export const searchMusic = async (
   }
 }
 
+/**
+ * Search albums
+ */
+export const searchAlbums = async (
+  query,
+  provider = 'jiosaavn',
+  options = {},
+) => {
+  if (!query || typeof query !== 'string' || !query.trim()) {
+    throw new MusicApiError('An album search query is required', {
+      code: 'MISSING_QUERY',
+    })
+  }
+
+  validateProvider(provider)
+
+  const params = new URLSearchParams({
+    query: query.trim(),
+  })
+
+  if (options.limit !== undefined) {
+    params.set('limit', String(options.limit))
+  }
+
+  if (options.page !== undefined) {
+    params.set('page', String(options.page))
+  }
+
+  const payload = await request(
+    `/api/search/albums?${params.toString()}`,
+  )
+
+  if (
+    !payload ||
+    payload.success !== true ||
+    !payload.data ||
+    !Array.isArray(payload.data.results)
+  ) {
+    throw new MusicApiError(
+      'JioSaavn returned invalid album search results',
+      {
+        code: 'INVALID_ALBUM_SEARCH_RESPONSE',
+      },
+    )
+  }
+
+  return {
+    provider: 'jiosaavn',
+    query: query.trim(),
+    total: Number(payload.data.total) || 0,
+    start: Number(payload.data.start) || 0,
+    results: payload.data.results.map(normalizeAlbum),
+  }
+}
+
+/**
+ * Get a single album by ID or JioSaavn link
+ */
+export const getAlbum = async (
+  idOrLink,
+  provider = 'jiosaavn',
+) => {
+  if (!idOrLink || typeof idOrLink !== 'string') {
+    throw new MusicApiError('An album ID or link is required', {
+      code: 'MISSING_ALBUM_ID',
+    })
+  }
+
+  validateProvider(provider)
+
+  const isLink = idOrLink.includes('jiosaavn.com/album/')
+
+  const params = new URLSearchParams()
+
+  if (isLink) {
+    params.set('link', idOrLink)
+  } else {
+    params.set('id', idOrLink)
+  }
+
+  const payload = await request(`/api/albums?${params.toString()}`)
+
+  if (
+    !payload ||
+    payload.success !== true ||
+    !payload.data
+  ) {
+    throw new MusicApiError(
+      'JioSaavn returned an invalid album',
+      {
+        code: 'INVALID_ALBUM_RESPONSE',
+      },
+    )
+  }
+
+  return {
+    provider: 'jiosaavn',
+    album: payload.data,
+  }
+}
+
+/**
+ * Get a single track
+ */
 export const getTrack = async (
   id,
   provider = 'jiosaavn',
@@ -225,8 +367,6 @@ export const getTrack = async (
     )
   }
 
-  // The API returns data as an array.
-  // Example: data: [{ id, name, downloadUrl, ... }]
   const song = Array.isArray(payload.data)
     ? payload.data[0]
     : payload.data
@@ -246,6 +386,9 @@ export const getTrack = async (
   }
 }
 
+/**
+ * Get playable stream URL
+ */
 export const getStreamUrl = async (
   id,
   provider = 'jiosaavn',
@@ -271,6 +414,8 @@ export const getStreamUrl = async (
 
 export const musicApi = {
   searchMusic,
+  searchAlbums,
+  getAlbum,
   getTrack,
   getStreamUrl,
 }

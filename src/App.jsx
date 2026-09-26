@@ -19,12 +19,6 @@ import {
   X,
 } from 'lucide-react'
 
-import {
-  createPlaylist,
-  addSongToPlaylist,
-  readPlaylists,
-} from './utils/playlists'
-
 import TopBar from './components/TopBar'
 import DesktopSidebar from './components/DesktopSidebar'
 import BottomNav from './components/BottomNav'
@@ -199,6 +193,50 @@ const historyRowFromTrack = (track, userId) => ({
 })
 
 
+
+const playlistSongRowFromTrack = (track, playlistId, userId) => ({
+  playlist_id: playlistId,
+  user_id: userId,
+  song_id: String(track.id),
+  provider: track.provider || DEFAULT_PROVIDER,
+  title: track.title || 'Unknown title',
+  artist: track.artist || null,
+  album: track.album || null,
+  artwork: track.artwork || null,
+  duration: Number.isFinite(Number(track.durationSeconds ?? track.duration))
+    ? Number(track.durationSeconds ?? track.duration)
+    : 0,
+  stream_url: track.streamUrl || track.stream_url || null,
+  song_url: track.songUrl || track.song_url || null,
+  year: track.year || null,
+  language: track.language || null,
+  explicit_content:
+    typeof track.explicitContent === 'boolean'
+      ? track.explicitContent
+      : typeof track.explicit_content === 'boolean'
+        ? track.explicit_content
+        : null,
+})
+
+const playlistSongFromRow = (row) => ({
+  id: row.song_id,
+  provider: row.provider || DEFAULT_PROVIDER,
+  title: row.title || 'Unknown title',
+  artist: row.artist || 'Unknown artist',
+  album: row.album || null,
+  artwork: row.artwork || null,
+  duration: Number(row.duration) || 0,
+  durationSeconds: Number(row.duration) || 0,
+  streamUrl: row.stream_url || null,
+  stream_url: row.stream_url || null,
+  songUrl: row.song_url || null,
+  song_url: row.song_url || null,
+  year: row.year || null,
+  language: row.language || null,
+  explicitContent: row.explicit_content ?? false,
+  playable: Boolean(row.stream_url || row.song_url),
+})
+
 function App() {
   const [activeTab, setActiveTab] = useState('Home')
   const [user, setUser] = useState(null)
@@ -346,15 +384,15 @@ function App() {
         )
         .maybeSingle()
 
-      console.log(
-        'HISTORY: Supabase response',
-        JSON.stringify({ data, error }, null, 2),
-      )
+      console.log('HISTORY: Supabase response', {
+        data,
+        error,
+      })
 
       if (error) {
         console.error(
           'Failed to save listening history:',
-          JSON.stringify(error, null, 2),
+          error,
         )
 
         // Allow a retry if the database operation failed.
@@ -432,9 +470,66 @@ function App() {
   /*
    * Load authenticated user's music state.
    *
-   * Recently played and playlists are still local for now.
+   * Recently played remains local; playlists are persisted in Supabase.
    * Liked songs are now persisted in Supabase per user.
    */
+  const loadPlaylistsForUser = async (userId) => {
+    if (!userId) {
+      setPlaylists([])
+      setSelectedPlaylist(null)
+      return
+    }
+
+    const { data: playlistRows, error: playlistError } = await supabase
+      .from('playlists')
+      .select('id, user_id, name, description, cover_url, is_public, created_at, updated_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+
+    if (playlistError) {
+      console.error('Failed to load playlists:', playlistError)
+      setPlaylists([])
+      setSelectedPlaylist(null)
+      return
+    }
+
+    const { data: songRows, error: songError } = await supabase
+      .from('playlist_songs')
+      .select('id, playlist_id, user_id, song_id, provider, title, artist, album, artwork, duration, stream_url, song_url, year, language, explicit_content, added_at')
+      .eq('user_id', userId)
+      .order('added_at', { ascending: true })
+
+    if (songError) {
+      console.error('Failed to load playlist songs:', songError)
+    }
+
+    const songsByPlaylist = new Map()
+
+    for (const row of songRows || []) {
+      const key = String(row.playlist_id)
+      const songs = songsByPlaylist.get(key) || []
+      songs.push(playlistSongFromRow(row))
+      songsByPlaylist.set(key, songs)
+    }
+
+    const nextPlaylists = (playlistRows || []).map((row) => ({
+      ...row,
+      title: row.name,
+      name: row.name,
+      songs: songsByPlaylist.get(String(row.id)) || [],
+      totalSongs: (songsByPlaylist.get(String(row.id)) || []).length,
+    }))
+
+    setPlaylists(nextPlaylists)
+
+    setSelectedPlaylist((current) => {
+      if (!current?.id) return null
+      return nextPlaylists.find((item) => item.id === current.id) || null
+    })
+
+    return nextPlaylists
+  }
+
   useEffect(() => {
     let cancelled = false
 
@@ -449,7 +544,7 @@ function App() {
       }
 
       setRecentlyPlayed(readRecentlyPlayed().map(toUiSong))
-      setPlaylists(readPlaylists())
+      await loadPlaylistsForUser(user.id)
 
       const { data: historyData, error: historyError } =
         await supabase
@@ -464,15 +559,12 @@ function App() {
       if (cancelled) return
 
       if (historyError) {
-      console.error(
-        'FAILED TO LOAD LISTENING HISTORY:',
-        JSON.stringify(historyError, null, 2),
-      )
-
-      console.error('HISTORY USER ID:', user.id)
-
-      setListeningHistory([])
-    } else {
+        console.error(
+          'Failed to load listening history:',
+          historyError,
+        )
+        setListeningHistory([])
+      } else {
         setListeningHistory(
           (historyData || [])
             .map(historySongFromRow)
@@ -491,13 +583,7 @@ function App() {
       if (cancelled) return
 
       if (error) {
-        console.error(
-          'FAILED TO LOAD LIKED SONGS:',
-          JSON.stringify(error, null, 2),
-        )
-
-        console.error('LIKED SONGS USER ID:', user.id)
-
+        console.error('Failed to load liked songs:', error)
         setFavorites([])
         return
       }
@@ -573,28 +659,6 @@ function App() {
     return () => window.cancelAnimationFrame(frame)
   }, [activeTab])
 
-  /*
-   * Keep playlist state synchronized with local storage.
-   */
-  useEffect(() => {
-    if (!user) return undefined
-
-    const handleStorage = () => {
-      setPlaylists(readPlaylists())
-    }
-
-    window.addEventListener(
-      'storage',
-      handleStorage,
-    )
-
-    return () => {
-      window.removeEventListener(
-        'storage',
-        handleStorage,
-      )
-    }
-  }, [])
 
   /*
    * Search
@@ -988,20 +1052,9 @@ function App() {
   /*
    * Refresh playlist state from persistent storage.
    */
-  const refreshPlaylists = () => {
-    const nextPlaylists = readPlaylists()
-    setPlaylists(nextPlaylists)
-
-    if (selectedPlaylist?.id) {
-      const updatedSelected = nextPlaylists.find(
-        (playlist) =>
-          playlist.id === selectedPlaylist.id,
-      )
-
-      setSelectedPlaylist(
-        updatedSelected || null,
-      )
-    }
+  const refreshPlaylists = async () => {
+    if (!user?.id) return []
+    return loadPlaylistsForUser(user.id)
   }
 
   /*
@@ -1070,79 +1123,189 @@ function App() {
    * Create a new playlist and automatically
    * add the selected song to it.
    */
-  const handleCreatePlaylist = () => {
+  const handleCreatePlaylist = async () => {
     const name = playlistName.trim()
 
+    if (!user?.id) {
+      setPlaylistError('You must be signed in to create a playlist.')
+      return
+    }
+
     if (!name) {
-      setPlaylistError(
-        'Give your playlist a name.',
-      )
+      setPlaylistError('Give your playlist a name.')
       return
     }
 
     try {
-      const playlist = createPlaylist(name)
+      setPlaylistError('')
 
-      if (!playlist?.id) {
-        setPlaylistError(
-          'Unable to create playlist.',
-        )
-        return
-      }
+      const { data: playlist, error: playlistInsertError } = await supabase
+        .from('playlists')
+        .insert({
+          user_id: user.id,
+          name,
+          description: null,
+          cover_url: null,
+          is_public: false,
+        })
+        .select('id, user_id, name, description, cover_url, is_public, created_at, updated_at')
+        .single()
+
+      if (playlistInsertError) throw playlistInsertError
 
       if (playlistModal.song) {
-        addSongToPlaylist(
-          playlist.id,
-          playlistModal.song,
-        )
+        const { error: songInsertError } = await supabase
+          .from('playlist_songs')
+          .insert(playlistSongRowFromTrack(playlistModal.song, playlist.id, user.id))
+
+        if (songInsertError) {
+          console.error('Playlist created but song could not be added:', songInsertError)
+          setPlaylistError('Playlist created, but the song could not be added.')
+        }
       }
 
-      refreshPlaylists()
+      await refreshPlaylists()
       closePlaylistModal()
     } catch (error) {
-      console.error(
-        'Create playlist error:',
-        error,
-      )
-
-      setPlaylistError(
-        'Unable to create playlist.',
-      )
+      console.error('Create playlist error:', error)
+      setPlaylistError(error?.message || 'Unable to create playlist.')
     }
   }
 
-  /*
-   * Add the selected song to an existing playlist.
-   */
-  const handleAddToPlaylist = (
-    playlist,
-  ) => {
-    if (
-      !playlist?.id ||
-      !playlistModal.song
-    ) {
-      return
-    }
+  const handleAddToPlaylist = async (playlist) => {
+    if (!user?.id || !playlist?.id || !playlistModal.song) return
 
     try {
-      if (playlistModal.song) {
-        addSongToPlaylist(
-          playlist.id,
-          playlistModal.song,
-        )
+      setPlaylistError('')
+
+      const song = playlistModal.song
+      const { data: existing, error: existingError } = await supabase
+        .from('playlist_songs')
+        .select('id')
+        .eq('playlist_id', playlist.id)
+        .eq('user_id', user.id)
+        .eq('song_id', String(song.id))
+        .eq('provider', song.provider || DEFAULT_PROVIDER)
+        .maybeSingle()
+
+      if (existingError) throw existingError
+
+      if (existing) {
+        setPlaylistError('This song is already in the playlist.')
+        return
       }
 
-      refreshPlaylists()
+      const { error } = await supabase
+        .from('playlist_songs')
+        .insert(playlistSongRowFromTrack(song, playlist.id, user.id))
+
+      if (error) throw error
+
+      await supabase
+        .from('playlists')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', playlist.id)
+        .eq('user_id', user.id)
+
+      await refreshPlaylists()
       closePlaylistModal()
     } catch (error) {
-      console.error(
-        'Add to playlist error:',
-        error,
-      )
+      console.error('Add to playlist error:', error)
+      setPlaylistError(error?.message || 'Unable to add this song to the playlist.')
+    }
+  }
 
-      setPlaylistError(
-        'Unable to add this song to the playlist.',
-      )
+  const handleRenamePlaylist = async (playlist) => {
+    if (!user?.id || !playlist?.id) return
+
+    const currentName = playlist.name || playlist.title || ''
+    const nextName = window.prompt('Rename playlist', currentName)?.trim()
+
+    if (!nextName || nextName === currentName) return
+
+    try {
+      const { error } = await supabase
+        .from('playlists')
+        .update({
+          name: nextName,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', playlist.id)
+        .eq('user_id', user.id)
+
+      if (error) throw error
+
+      await refreshPlaylists()
+    } catch (error) {
+      console.error('Rename playlist error:', error)
+      setPlaylistError(error?.message || 'Unable to rename playlist.')
+    }
+  }
+
+  const handleEditPlaylistDescription = async (playlist) => {
+    if (!user?.id || !playlist?.id) return
+
+    const currentDescription = playlist.description || ''
+    const nextDescription = window.prompt(
+      'Playlist description',
+      currentDescription,
+    )
+
+    if (nextDescription === null || nextDescription === currentDescription) return
+
+    try {
+      const { error } = await supabase
+        .from('playlists')
+        .update({
+          description: nextDescription.trim() || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', playlist.id)
+        .eq('user_id', user.id)
+
+      if (error) throw error
+
+      await refreshPlaylists()
+    } catch (error) {
+      console.error('Edit playlist description error:', error)
+      setPlaylistError(error?.message || 'Unable to update playlist description.')
+    }
+  }
+
+  const handleDeletePlaylist = async (playlist) => {
+    if (!user?.id || !playlist?.id) return
+
+    const name = playlist.name || playlist.title || 'this playlist'
+    const confirmed = window.confirm(`Delete “${name}”? This cannot be undone.`)
+
+    if (!confirmed) return
+
+    try {
+      const { error: songsError } = await supabase
+        .from('playlist_songs')
+        .delete()
+        .eq('playlist_id', playlist.id)
+        .eq('user_id', user.id)
+
+      if (songsError) throw songsError
+
+      const { error: playlistError } = await supabase
+        .from('playlists')
+        .delete()
+        .eq('id', playlist.id)
+        .eq('user_id', user.id)
+
+      if (playlistError) throw playlistError
+
+      if (selectedPlaylist?.id === playlist.id) {
+        setSelectedPlaylist(null)
+        setActiveTab('Library')
+      }
+
+      await refreshPlaylists()
+    } catch (error) {
+      console.error('Delete playlist error:', error)
+      setPlaylistError(error?.message || 'Unable to delete playlist.')
     }
   }
 
@@ -1602,12 +1765,15 @@ function App() {
         {playlists.length ? (
           <div className="grid gap-3 sm:grid-cols-2">
             {playlists.map((playlist) => (
-              <button
+              <div
                 key={playlist.id}
-                type="button"
                 className="rounded-[20px] border border-white/[0.07] bg-white/[0.02] p-4 text-left transition hover:border-white/[0.12] hover:bg-white/[0.045]"
               >
-                <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => openPlaylist(playlist)}
+                  className="flex w-full items-center gap-3 text-left"
+                >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white">
                     <ListMusic size={19} />
                   </div>
@@ -1633,8 +1799,32 @@ function App() {
                         : 'songs'}
                     </p>
                   </div>
+                </button>
+
+                <div className="mt-3 flex items-center gap-2 border-t border-white/[0.06] pt-3">
+                  <button
+                    type="button"
+                    onClick={() => handleRenamePlaylist(playlist)}
+                    className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] text-white/55 transition hover:bg-white/[0.06] hover:text-white"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleEditPlaylistDescription(playlist)}
+                    className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] text-white/55 transition hover:bg-white/[0.06] hover:text-white"
+                  >
+                    Description
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeletePlaylist(playlist)}
+                    className="ml-auto rounded-full border border-red-400/15 px-3 py-1.5 text-[11px] text-red-300/70 transition hover:bg-red-400/[0.08] hover:text-red-200"
+                  >
+                    Delete
+                  </button>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         ) : (
@@ -2240,6 +2430,36 @@ function App() {
                   ? 'song'
                   : 'songs'}
               </p>
+
+              {playlist.description ? (
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-white/40">
+                  {playlist.description}
+                </p>
+              ) : null}
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleRenamePlaylist(playlist)}
+                  className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/55 transition hover:bg-white/[0.06] hover:text-white"
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleEditPlaylistDescription(playlist)}
+                  className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/55 transition hover:bg-white/[0.06] hover:text-white"
+                >
+                  Edit description
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeletePlaylist(playlist)}
+                  className="rounded-full border border-red-400/15 px-3 py-1.5 text-xs text-red-300/70 transition hover:bg-red-400/[0.08] hover:text-red-200"
+                >
+                  Delete playlist
+                </button>
+              </div>
             </div>
 
             <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white shadow-[0_16px_40px_rgba(117,103,248,0.2)]">
