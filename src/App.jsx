@@ -31,7 +31,7 @@ import LyricsSheet from './components/LyricsSheet'
 import ProgressBar from './components/ProgressBar'
 import Artwork from './components/Artwork'
 
-import { searchMusic } from './services/musicApi'
+import { getAlbum, searchAlbums, searchMusic } from './services/musicApi'
 import { useMusicPlayer } from './hooks/useMusicPlayer'
 
 import {
@@ -45,7 +45,9 @@ import {
 // read/write the currently signed-in user's rows.
 
 const DEFAULT_PROVIDER = 'jiosaavn'
-const SEARCH_PAGE_SIZE = 10
+const SEARCH_PAGE_SIZE = 20
+const SEARCH_ALBUM_LIMIT = 20
+const SEARCH_ALBUM_PAGES = 4
 
 const sameTrack = (left, right) => {
   if (!left || !right) return false
@@ -69,6 +71,17 @@ const dedupeTracks = (tracks) =>
       allTracks.findIndex(
         (candidate) =>
           trackKey(candidate) === trackKey(track),
+      ) === index,
+  )
+
+const albumKey = (album) =>
+  `${album?.provider || DEFAULT_PROVIDER}:${album?.id || normalizeSearchText(album?.title)}`
+
+const dedupeAlbums = (albums) =>
+  albums.filter(
+    (album, index, allAlbums) =>
+      allAlbums.findIndex(
+        (candidate) => albumKey(candidate) === albumKey(album),
       ) === index,
   )
 
@@ -104,6 +117,70 @@ function toUiSong(track) {
     playable: track.playable !== false,
     cover: '',
   }
+}
+
+function normalizeSearchAlbum(album) {
+  if (!album || typeof album !== 'object') return null
+
+  const id = album.id != null ? String(album.id) : ''
+  const title = String(
+    album.title ||
+      album.name ||
+      album.albumName ||
+      '',
+  ).trim()
+
+  if (!id || !title) return null
+
+  return {
+    ...album,
+    id,
+    provider: album.provider || DEFAULT_PROVIDER,
+    title,
+    artist:
+      album.artist ||
+      album.artistName ||
+      album.primaryArtist ||
+      'Unknown artist',
+    artwork:
+      album.artwork ||
+      album.image ||
+      album.cover ||
+      album.coverImage ||
+      null,
+    year: album.year || null,
+    songCount:
+      Number(album.songCount ?? album.song_count ?? album.songCount) ||
+      0,
+  }
+}
+
+const normalizeSearchText = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const albumMatchesSearch = (album, query, songs = []) => {
+  if (!album?.title) return false
+
+  const albumTitle = normalizeSearchText(album.title)
+  const normalizedQuery = normalizeSearchText(query)
+
+  if (
+    albumTitle &&
+    (albumTitle === normalizedQuery ||
+      albumTitle.includes(normalizedQuery) ||
+      normalizedQuery.includes(albumTitle))
+  ) {
+    return true
+  }
+
+  return songs.some(
+    (song) =>
+      normalizeSearchText(song.album) === albumTitle,
+  )
 }
 
 function formatTime(value) {
@@ -260,6 +337,13 @@ function App() {
     useState(false)
 
   const [searchResults, setSearchResults] = useState([])
+  const [searchFilter, setSearchFilter] = useState('All')
+  const [searchAlbum, setSearchAlbum] = useState(null)
+  const [searchAlbumResults, setSearchAlbumResults] = useState([])
+  const [selectedAlbum, setSelectedAlbum] = useState(null)
+  const [selectedAlbumSongs, setSelectedAlbumSongs] = useState([])
+  const [albumStatus, setAlbumStatus] = useState('idle')
+  const [albumError, setAlbumError] = useState('')
   const [searchStatus, setSearchStatus] =
     useState('idle')
   const [searchError, setSearchError] = useState('')
@@ -300,8 +384,17 @@ function App() {
   const [playlistName, setPlaylistName] =
     useState('')
 
+  const [playlistDescription, setPlaylistDescription] =
+    useState('')
+
   const [playlistError, setPlaylistError] =
     useState('')
+
+  const [playlistDialog, setPlaylistDialog] = useState({
+    open: false,
+    mode: null,
+    playlist: null,
+  })
 
   const searchRequestIdRef = useRef(0)
   const lastSearchQueryRef = useRef('')
@@ -540,6 +633,12 @@ function App() {
         setFavorites([])
         setPlaylists([])
         setSelectedPlaylist(null)
+        setSelectedAlbum(null)
+        setSelectedAlbumSongs([])
+        setAlbumStatus('idle')
+        setAlbumError('')
+        setSearchAlbum(null)
+        setSearchAlbumResults([])
         return
       }
 
@@ -618,8 +717,19 @@ function App() {
     // Reset app state.
     setActiveTab('Home')
     setSelectedPlaylist(null)
+    setSelectedAlbum(null)
+    setSelectedAlbumSongs([])
+    setAlbumStatus('idle')
+    setAlbumError('')
     setSearchText('')
     setSearchResults([])
+    setSearchFilter('All')
+    setSearchAlbum(null)
+    setSearchAlbumResults([])
+    setSelectedAlbum(null)
+    setSelectedAlbumSongs([])
+    setAlbumStatus('idle')
+    setAlbumError('')
     setSearchStatus('idle')
     setSearchError('')
     setSubmittedQuery('')
@@ -672,6 +782,13 @@ function App() {
       lastSearchQueryRef.current = ''
 
       setSearchResults([])
+      setSearchFilter('All')
+      setSearchAlbum(null)
+      setSearchAlbumResults([])
+      setSelectedAlbum(null)
+      setSelectedAlbumSongs([])
+      setAlbumStatus('idle')
+      setAlbumError('')
       setSearchStatus('idle')
       setSearchError('')
       setSubmittedQuery('')
@@ -694,26 +811,44 @@ function App() {
       searchRequestIdRef.current + 1
 
     searchRequestIdRef.current = requestId
-    lastSearchQueryRef.current =
-      normalizedQuery
+    lastSearchQueryRef.current = normalizedQuery
 
     setActiveTab('Browse')
     setShowSearchSheet(false)
     setSearchStatus('loading')
     setSearchError('')
     setSubmittedQuery(normalizedQuery)
+    setSearchAlbum(null)
+    setSearchAlbumResults([])
     setIsLoadingMore(false)
     setLoadMoreError('')
     setHasMoreResults(false)
 
     try {
-      const response = await searchMusic(
-        normalizedQuery,
-        DEFAULT_PROVIDER,
-        {
-          limit: SEARCH_PAGE_SIZE,
-        },
-      )
+      const [songsResponse, albumPageResponses] =
+        await Promise.all([
+          searchMusic(
+            normalizedQuery,
+            DEFAULT_PROVIDER,
+            {
+              limit: SEARCH_PAGE_SIZE,
+            },
+          ),
+          Promise.all(
+            Array.from(
+              { length: SEARCH_ALBUM_PAGES },
+              (_, index) =>
+                searchAlbums(
+                  normalizedQuery,
+                  DEFAULT_PROVIDER,
+                  {
+                    limit: SEARCH_ALBUM_LIMIT,
+                    page: index + 1,
+                  },
+                ).catch(() => null),
+            ),
+          ),
+        ])
 
       if (
         requestId !==
@@ -723,17 +858,68 @@ function App() {
       }
 
       const results = dedupeTracks(
-        response.results.map(toUiSong),
+        songsResponse.results.map(toUiSong),
       )
 
+      const albumResults = dedupeAlbums(
+        albumPageResponses
+          .flatMap((response) =>
+            Array.isArray(response?.results)
+              ? response.results
+              : [],
+          )
+          .map(normalizeSearchAlbum)
+          .filter(Boolean),
+      )
+
+      /*
+       * JioSaavn's album-search endpoint can sometimes return fewer
+       * albums than the song search exposes. Build additional album
+       * cards from the unique album metadata already present in the
+       * song results. These cards are still opened inside Auraan;
+       * openAlbum() uses the real album ID/link when available and
+       * falls back to an exact album-song search when it is not.
+       */
+      const songDerivedAlbums = dedupeAlbums(
+        results
+          .filter((song) => song?.album)
+          .map((song) => ({
+            id: song.albumId
+              ? String(song.albumId)
+              : `derived-album-${encodeURIComponent(song.album)}`,
+            provider: DEFAULT_PROVIDER,
+            title: song.album,
+            artist: song.artist || 'Unknown artist',
+            artwork: song.artwork || null,
+            year: song.year || null,
+            songCount: results.filter(
+              (candidate) =>
+                normalizeSearchText(candidate.album) ===
+                normalizeSearchText(song.album),
+            ).length,
+            url: song.albumUrl || null,
+            isDerived: !song.albumId && !song.albumUrl,
+          })),
+      )
+
+      const finalAlbums = dedupeAlbums([
+        ...albumResults,
+        ...songDerivedAlbums,
+      ])
+
+      setSearchAlbumResults(finalAlbums)
+      setSearchAlbum(finalAlbums[0] || null)
       setSearchResults(results)
+      setSearchFilter('All')
 
       setSearchStatus(
-        results.length ? 'success' : 'empty',
+        results.length || finalAlbums.length
+          ? 'success'
+          : 'empty',
       )
 
       setHasMoreResults(
-        response.results.length >=
+        songsResponse.results.length >=
           SEARCH_PAGE_SIZE,
       )
     } catch {
@@ -849,6 +1035,7 @@ function App() {
     lastSearchQueryRef.current = ''
 
     setSearchResults([])
+    setSearchFilter('All')
     setSearchStatus('idle')
     setSearchError('')
     setSubmittedQuery('')
@@ -1044,6 +1231,242 @@ function App() {
   }
 
   /*
+   * Open an album from the inline search result.
+   *
+   * Real JioSaavn album cards are loaded by album ID/link so the
+   * album page contains the songs that actually belong to that
+   * album. Song-derived cards (which may not have an album ID)
+   * use an exact album-title search as a safe fallback.
+   */
+  const openAlbum = async (album) => {
+    if (!album?.title) return
+
+    setSelectedAlbum(album)
+    setSelectedAlbumSongs([])
+    setAlbumStatus('loading')
+    setAlbumError('')
+    setActiveTab('Album')
+    setShowSearchSheet(false)
+    setQueueOpen(false)
+
+    try {
+      let songs = []
+
+      const albumReference =
+        album.url ||
+        (album.id &&
+        !String(album.id).startsWith('derived-album-') &&
+        !String(album.id).startsWith('album-')
+          ? String(album.id)
+          : null)
+
+      if (albumReference) {
+        try {
+          const response = await getAlbum(
+            albumReference,
+            DEFAULT_PROVIDER,
+          )
+
+          const albumData = response?.album || response?.data || response
+
+          const rawSongs =
+            (Array.isArray(albumData?.songs) &&
+              albumData.songs) ||
+            (Array.isArray(albumData?.tracks) &&
+              albumData.tracks) ||
+            (Array.isArray(albumData?.results) &&
+              albumData.results) ||
+            []
+
+          songs = dedupeTracks(
+            rawSongs
+              .map(toUiSong)
+              .filter(Boolean),
+          )
+        } catch (albumError) {
+          console.warn(
+            'Direct JioSaavn album lookup failed; falling back to exact album search.',
+            albumError,
+          )
+        }
+      }
+
+      /*
+       * Fallback for album cards that were derived from the song
+       * search and therefore do not have a real JioSaavn album ID.
+       */
+      if (!songs.length) {
+        const response = await searchMusic(
+          album.title,
+          DEFAULT_PROVIDER,
+          { limit: 100 },
+        )
+
+        const albumTitle = normalizeSearchText(album.title)
+
+        songs = dedupeTracks(
+          (Array.isArray(response?.results)
+            ? response.results
+            : []
+          )
+            .map(toUiSong)
+            .filter(
+              (song) =>
+                normalizeSearchText(song.album) ===
+                albumTitle,
+            ),
+        )
+      }
+
+      setSelectedAlbumSongs(songs)
+      setAlbumStatus(songs.length ? 'success' : 'empty')
+    } catch (error) {
+      console.error('Failed to load album:', error)
+      setSelectedAlbumSongs([])
+      setAlbumStatus('error')
+      setAlbumError('Unable to load this album right now.')
+    }
+  }
+
+  const closeAlbum = () => {
+    setSelectedAlbum(null)
+    setSelectedAlbumSongs([])
+    setAlbumStatus('idle')
+    setAlbumError('')
+    setActiveTab('Browse')
+  }
+
+  /*
+   * =========================================================
+   * ALBUM
+   * =========================================================
+   */
+  const renderSelectedAlbum = () => {
+    if (!selectedAlbum) {
+      return (
+        <div className="pb-28 lg:pb-10">
+          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-12 text-center">
+            <p className="text-sm font-medium text-white/70">
+              No album selected.
+            </p>
+            <button
+              type="button"
+              onClick={() => setActiveTab('Browse')}
+              className="mt-5 min-h-11 rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition hover:bg-white/90 active:scale-95"
+            >
+              Back to search
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-8 pb-28 lg:pb-10">
+        <section className="rounded-[24px] border border-white/[0.07] bg-[#101114] p-5 sm:p-7">
+          <button
+            type="button"
+            onClick={closeAlbum}
+            className="mb-6 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-white/40 transition hover:text-white/75"
+          >
+            <ArrowLeft size={14} />
+            Back to search
+          </button>
+
+          <div className="flex flex-col gap-6 sm:flex-row sm:items-end">
+            <div className="relative h-44 w-44 shrink-0 overflow-hidden rounded-[20px] bg-[#18191d] ring-1 ring-white/[0.08]">
+              <Artwork
+                src={selectedAlbum.artwork}
+                className="absolute inset-0 h-full w-full object-cover"
+                iconSize={48}
+              />
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/35">
+                Album
+              </p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
+                {selectedAlbum.title}
+              </h1>
+              <p className="mt-3 text-sm text-white/50">
+                {selectedAlbum.artist || 'Unknown artist'}
+                {selectedAlbum.year ? ` · ${selectedAlbum.year}` : ''}
+              </p>
+              {albumStatus === 'success' ? (
+                <p className="mt-2 text-xs text-white/30">
+                  {selectedAlbumSongs.length}{' '}
+                  {selectedAlbumSongs.length === 1 ? 'song' : 'songs'}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <SectionHeader title="Songs" />
+
+          {albumStatus === 'loading' ? (
+            <p className="text-sm text-white/45">
+              Loading album songs...
+            </p>
+          ) : null}
+
+          {albumStatus === 'error' ? (
+            <div className="rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-7">
+              <p className="text-sm text-white/60">{albumError}</p>
+              <button
+                type="button"
+                onClick={() => openAlbum(selectedAlbum)}
+                className="mt-4 min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.08]"
+              >
+                Try again
+              </button>
+            </div>
+          ) : null}
+
+          {albumStatus === 'empty' ? (
+            <div className="rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-7">
+              <p className="text-sm text-white/60">
+                No songs were found for this album.
+              </p>
+            </div>
+          ) : null}
+
+          {albumStatus === 'success' ? (
+            <div className="space-y-2">
+              {selectedAlbumSongs.map((song, index) => (
+                <SongRow
+                  key={`${song.provider}-${song.id}`}
+                  song={song}
+                  number={index + 1}
+                  onOpenPlayer={(track) =>
+                    handleOpenPlayer(track, selectedAlbumSongs)
+                  }
+                  onMoreOptions={handleSongMoreOptions}
+                  isActive={sameTrack(song, currentSong)}
+                  isLoading={
+                    playerLoading &&
+                    sameTrack(song, currentSong)
+                  }
+                  isPlaying={isPlaying}
+                  error={
+                    playerError &&
+                    sameTrack(song, currentSong)
+                      ? playerError
+                      : ''
+                  }
+                  {...favoriteProps(song)}
+                />
+              ))}
+            </div>
+          ) : null}
+        </section>
+      </div>
+    )
+  }
+
+  /*
    * =========================================================
    * PLAYLIST FUNCTIONALITY
    * =========================================================
@@ -1116,7 +1539,9 @@ function App() {
     })
 
     setPlaylistName('')
+    setPlaylistDescription('')
     setPlaylistError('')
+    setPlaylistDialog({ open: false, mode: null, playlist: null })
   }
 
   /*
@@ -1215,49 +1640,57 @@ function App() {
     }
   }
 
-  const handleRenamePlaylist = async (playlist) => {
-    if (!user?.id || !playlist?.id) return
+  const openEditPlaylistDialog = (playlist) => {
+    if (!playlist?.id) return
 
-    const currentName = playlist.name || playlist.title || ''
-    const nextName = window.prompt('Rename playlist', currentName)?.trim()
-
-    if (!nextName || nextName === currentName) return
-
-    try {
-      const { error } = await supabase
-        .from('playlists')
-        .update({
-          name: nextName,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', playlist.id)
-        .eq('user_id', user.id)
-
-      if (error) throw error
-
-      await refreshPlaylists()
-    } catch (error) {
-      console.error('Rename playlist error:', error)
-      setPlaylistError(error?.message || 'Unable to rename playlist.')
-    }
+    setPlaylistName(playlist.name || playlist.title || '')
+    setPlaylistDescription(playlist.description || '')
+    setPlaylistError('')
+    setPlaylistDialog({
+      open: true,
+      mode: 'edit',
+      playlist,
+    })
   }
 
-  const handleEditPlaylistDescription = async (playlist) => {
+  const openDeletePlaylistDialog = (playlist) => {
+    if (!playlist?.id) return
+
+    setPlaylistError('')
+    setPlaylistDialog({
+      open: true,
+      mode: 'delete',
+      playlist,
+    })
+  }
+
+  const closePlaylistDialog = () => {
+    setPlaylistDialog({ open: false, mode: null, playlist: null })
+    setPlaylistName('')
+    setPlaylistDescription('')
+    setPlaylistError('')
+  }
+
+  const handleSavePlaylistDetails = async () => {
+    const playlist = playlistDialog.playlist
+    const name = playlistName.trim()
+    const description = playlistDescription.trim()
+
     if (!user?.id || !playlist?.id) return
 
-    const currentDescription = playlist.description || ''
-    const nextDescription = window.prompt(
-      'Playlist description',
-      currentDescription,
-    )
-
-    if (nextDescription === null || nextDescription === currentDescription) return
+    if (!name) {
+      setPlaylistError('Give your playlist a name.')
+      return
+    }
 
     try {
+      setPlaylistError('')
+
       const { error } = await supabase
         .from('playlists')
         .update({
-          description: nextDescription.trim() || null,
+          name,
+          description: description || null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', playlist.id)
@@ -1266,21 +1699,19 @@ function App() {
       if (error) throw error
 
       await refreshPlaylists()
+      closePlaylistDialog()
     } catch (error) {
-      console.error('Edit playlist description error:', error)
-      setPlaylistError(error?.message || 'Unable to update playlist description.')
+      console.error('Edit playlist error:', error)
+      setPlaylistError(error?.message || 'Unable to update playlist.')
     }
   }
 
   const handleDeletePlaylist = async (playlist) => {
     if (!user?.id || !playlist?.id) return
 
-    const name = playlist.name || playlist.title || 'this playlist'
-    const confirmed = window.confirm(`Delete “${name}”? This cannot be undone.`)
-
-    if (!confirmed) return
-
     try {
+      setPlaylistError('')
+
       const { error: songsError } = await supabase
         .from('playlist_songs')
         .delete()
@@ -1303,10 +1734,176 @@ function App() {
       }
 
       await refreshPlaylists()
+      closePlaylistDialog()
     } catch (error) {
       console.error('Delete playlist error:', error)
       setPlaylistError(error?.message || 'Unable to delete playlist.')
     }
+  }
+
+  const renderPlaylistEditDialog = () => {
+    if (!playlistDialog.open) return null
+
+    const playlist = playlistDialog.playlist
+    const isDelete = playlistDialog.mode === 'delete'
+    const title = isDelete ? 'Delete playlist' : 'Edit playlist'
+
+    return (
+      <div
+        className="fixed inset-0 z-[90] flex items-center justify-center bg-black/70 px-4 py-6 backdrop-blur-md"
+        aria-hidden="false"
+      >
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="playlist-edit-dialog-title"
+          className="w-full max-w-lg overflow-hidden rounded-[28px] border border-white/[0.09] bg-[#111214] shadow-[0_35px_120px_rgba(0,0,0,0.65)] ring-1 ring-white/[0.03]"
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-5 py-5 sm:px-6">
+            <div>
+              <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-[#A9A4FF]/70">
+                AURAAN playlist
+              </p>
+              <h3
+                id="playlist-edit-dialog-title"
+                className="mt-1 text-xl font-semibold tracking-[-0.035em] text-white"
+              >
+                {title}
+              </h3>
+              <p className="mt-1 text-xs leading-5 text-white/40">
+                {isDelete
+                  ? 'This will permanently remove the playlist and its songs.'
+                  : 'Update your playlist details.'}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={closePlaylistDialog}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.025] text-white/45 transition hover:border-white/[0.14] hover:bg-white/[0.07] hover:text-white active:scale-95"
+              aria-label="Close dialog"
+            >
+              <X size={17} />
+            </button>
+          </div>
+
+          {isDelete ? (
+            <div className="p-5 sm:p-6">
+              <div className="rounded-2xl border border-red-400/10 bg-red-400/[0.045] p-4">
+                <p className="text-sm font-medium text-white">
+                  Delete “{playlist?.name || playlist?.title || 'Untitled playlist'}”?
+                </p>
+                <p className="mt-2 text-xs leading-5 text-white/40">
+                  This action cannot be undone. The playlist and its saved songs will be removed from your account.
+                </p>
+              </div>
+
+              {playlistError ? (
+                <p className="mt-3 text-xs text-red-300" role="alert">
+                  {playlistError}
+                </p>
+              ) : null}
+
+              <div className="mt-5 flex gap-2">
+                <button
+                  type="button"
+                  onClick={closePlaylistDialog}
+                  className="min-h-11 flex-1 rounded-full border border-white/10 bg-white/[0.035] px-4 py-2.5 text-sm text-white/65 transition hover:bg-white/[0.07] hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeletePlaylist(playlist)}
+                  className="min-h-11 flex-1 rounded-full bg-red-400/[0.12] px-4 py-2.5 text-sm font-medium text-red-200 transition hover:bg-red-400/[0.18]"
+                >
+                  Delete playlist
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-5 p-5 sm:p-6">
+              <div>
+                <label htmlFor="edit-playlist-name" className="mb-2 block text-xs font-medium uppercase tracking-[0.16em] text-white/40">
+                  Playlist name
+                </label>
+                <input
+                  id="edit-playlist-name"
+                  autoFocus
+                  value={playlistName}
+                  onChange={(event) => {
+                    setPlaylistName(event.target.value)
+                    setPlaylistError('')
+                  }}
+                  maxLength={60}
+                  className="w-full rounded-2xl border border-white/10 bg-[#0b0c0f] px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-[#7567F8]/50 focus:ring-2 focus:ring-[#7567F8]/10"
+                  placeholder="My playlist"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="edit-playlist-description" className="mb-2 block text-xs font-medium uppercase tracking-[0.16em] text-white/40">
+                  Description
+                </label>
+                <textarea
+                  id="edit-playlist-description"
+                  value={playlistDescription}
+                  onChange={(event) => {
+                    setPlaylistDescription(event.target.value)
+                    setPlaylistError('')
+                  }}
+                  maxLength={300}
+                  rows={4}
+                  className="w-full resize-none rounded-2xl border border-white/10 bg-[#0b0c0f] px-4 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-white/25 focus:border-[#7567F8]/50 focus:ring-2 focus:ring-[#7567F8]/10"
+                  placeholder="Add a description..."
+                />
+              </div>
+
+              <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white shadow-[0_12px_30px_rgba(117,103,248,0.18)]">
+                    {playlist?.cover_url ? (
+                      <img src={playlist.cover_url} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <ListMusic size={22} />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-white/80">Playlist artwork</p>
+                    <p className="mt-1 text-xs leading-5 text-white/35">
+                      Custom artwork upload is coming next.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {playlistError ? (
+                <p className="text-xs text-[#A9A4FF]" role="alert">
+                  {playlistError}
+                </p>
+              ) : null}
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={closePlaylistDialog}
+                  className="min-h-11 flex-1 rounded-full border border-white/10 bg-white/[0.035] px-4 py-2.5 text-sm text-white/65 transition hover:bg-white/[0.07] hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSavePlaylistDetails()}
+                  className="min-h-11 flex-1 rounded-full bg-white px-4 py-2.5 text-sm font-medium text-black transition hover:bg-white/90 active:scale-[0.98]"
+                >
+                  Save changes
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    )
   }
 
   /*
@@ -1487,190 +2084,420 @@ function App() {
    * BROWSE
    * =========================================================
    */
-  const renderBrowseScreen = () => (
-    <div className="space-y-8 pb-28 lg:pb-10">
-      <section className="rounded-[20px] border border-white/[0.07] bg-[#101114] p-2">
-        <div className="flex items-center gap-3 rounded-[14px] border border-white/[0.06] bg-[#0b0c0f] px-4 py-3 text-white/60">
-          <Search size={17} />
+  const renderBrowseScreen = () => {
+    const searchTabs = [
+      'All',
+      'Songs',
+      'Albums',
+      'Artists',
+      'Playlists',
+    ]
 
-          <input
-            ref={searchInputRef}
-            value={searchText}
-            onChange={(event) =>
-              setSearchText(event.target.value)
-            }
-            onKeyDown={handleSearchKeyDown}
-            placeholder="Search artists, albums, songs"
-            className="w-full bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
-            aria-label="Search music"
-          />
+    const searchArtistResults = []
+    const artistMap = new Map()
 
-          {searchText ? (
-            <button
-              type="button"
-              onClick={handleClearSearch}
-              className="shrink-0 text-xs uppercase tracking-[0.16em] text-white/45 transition hover:text-white/80"
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
-      </section>
+    searchResults.forEach((song) => {
+      const artistNames = String(song?.artist || '')
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean)
 
-      {searchStatus !== 'idle' ? (
-        <section className="space-y-4">
-          <SectionHeader title="Search results" />
+      artistNames.forEach((artistName) => {
+        const key = normalizeSearchText(artistName)
+        if (!key || artistMap.has(key)) return
 
-          {searchStatus === 'loading' ? (
-            <p
-              className="text-sm text-white/45"
-              role="status"
-              aria-live="polite"
-            >
-              Searching for music...
-            </p>
-          ) : null}
+        artistMap.set(key, true)
+        searchArtistResults.push({
+          id: `artist-${encodeURIComponent(key)}`,
+          name: artistName,
+          artwork: song.artwork || null,
+          songCount: searchResults.filter((candidate) =>
+            String(candidate?.artist || '')
+              .split(',')
+              .map((name) => normalizeSearchText(name))
+              .includes(key),
+          ).length,
+        })
+      })
+    })
 
-          {searchStatus === 'error' ? (
-            <div
-              className="flex flex-wrap items-center gap-3"
-              role="alert"
-            >
-              <p className="text-sm text-white/50">
-                {searchError}
-              </p>
+    const searchPlaylistResults = playlists.filter((playlist) => {
+      const title = normalizeSearchText(
+        playlist?.title || playlist?.name,
+      )
+      const description = normalizeSearchText(
+        playlist?.description,
+      )
+      const query = normalizeSearchText(submittedQuery)
 
+      return Boolean(
+        query &&
+          (title.includes(query) ||
+            description.includes(query)),
+      )
+    })
+
+    const showArtists =
+      searchFilter === 'All' || searchFilter === 'Artists'
+    const showAlbums =
+      searchFilter === 'All' || searchFilter === 'Albums'
+    const showSongs =
+      searchFilter === 'All' || searchFilter === 'Songs'
+    const showPlaylists =
+      searchFilter === 'All' || searchFilter === 'Playlists'
+
+    const hasVisibleResults =
+      (showArtists && searchArtistResults.length > 0) ||
+      (showAlbums && searchAlbumResults.length > 0) ||
+      (showSongs && searchResults.length > 0) ||
+      (showPlaylists && searchPlaylistResults.length > 0)
+
+    return (
+      <div className="space-y-8 pb-28 lg:pb-10">
+        <section className="rounded-[20px] border border-white/[0.07] bg-[#101114] p-2">
+          <div className="flex items-center gap-3 rounded-[14px] border border-white/[0.06] bg-[#0b0c0f] px-4 py-3 text-white/60">
+            <Search size={17} />
+
+            <input
+              ref={searchInputRef}
+              value={searchText}
+              onChange={(event) =>
+                setSearchText(event.target.value)
+              }
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search artists, albums, songs"
+              className="w-full bg-transparent text-sm text-white placeholder:text-white/35 focus:outline-none"
+              aria-label="Search music"
+            />
+
+            {searchText ? (
               <button
                 type="button"
-                onClick={handleSearch}
-                className="min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/75 transition hover:bg-white/[0.08] active:scale-95"
+                onClick={handleClearSearch}
+                className="shrink-0 text-xs uppercase tracking-[0.16em] text-white/45 transition hover:text-white/80"
               >
-                Try again
+                Clear
               </button>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
+        </section>
 
-          {searchStatus === 'empty' ? (
-            <div className="rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-7">
-              <p className="text-sm text-white/70">
-                No music found for “
-                {submittedQuery}”.
-              </p>
+        {searchStatus !== 'idle' ? (
+          <section className="space-y-5">
+            <SectionHeader title="Search results" />
 
-              <p className="mt-2 text-xs text-white/40">
-                Try another artist, song, or album.
-              </p>
-            </div>
-          ) : null}
-
-          {(
-            searchStatus === 'success' ||
-            (searchStatus === 'loading' &&
-              searchResults.length > 0) ||
-            (searchStatus === 'error' &&
-              searchResults.length > 0)
-          ) ? (
-            <div className="space-y-3">
-              <div
-                className="flex items-center justify-between gap-3 text-xs text-white/35"
+            {searchStatus === 'loading' ? (
+              <p
+                className="text-sm text-white/45"
+                role="status"
                 aria-live="polite"
               >
-                <span>
-                  Results for “
-                  {submittedQuery}”
-                </span>
+                Searching for music...
+              </p>
+            ) : null}
 
-                <span>
-                  {searchResults.length} loaded
-                </span>
+            {searchStatus === 'error' ? (
+              <div
+                className="flex flex-wrap items-center gap-3"
+                role="alert"
+              >
+                <p className="text-sm text-white/50">
+                  {searchError}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={handleSearch}
+                  className="min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-white/75 transition hover:bg-white/[0.08] active:scale-95"
+                >
+                  Try again
+                </button>
               </div>
+            ) : null}
 
-              {searchResults.map(
-                (song, index) => (
-                  <SongRow
-                    key={`${song.provider}-${song.id}`}
-                    song={song}
-                    number={index + 1}
-                    onOpenPlayer={
-                      handleOpenPlayer
-                    }
-                    onMoreOptions={
-                      handleSongMoreOptions
-                    }
-                    isActive={sameTrack(
-                      song,
-                      currentSong,
-                    )}
-                    isLoading={
-                      playerLoading &&
-                      sameTrack(
-                        song,
-                        currentSong,
+            {searchStatus === 'empty' ? (
+              <div className="rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-7">
+                <p className="text-sm text-white/70">
+                  No music found for “{submittedQuery}”.
+                </p>
+
+                <p className="mt-2 text-xs text-white/40">
+                  Try another artist, song, or album.
+                </p>
+              </div>
+            ) : null}
+
+            {searchStatus !== 'idle' &&
+            (searchStatus === 'success' || hasVisibleResults) ? (
+              <div className="space-y-8">
+                <div className="sticky top-2 z-20 -mx-1 overflow-x-auto rounded-2xl border border-white/[0.07] bg-[#101114]/95 p-1.5 backdrop-blur-xl">
+                  <div className="flex min-w-max gap-1">
+                    {searchTabs.map((tab) => {
+                      const active = searchFilter === tab
+
+                      return (
+                        <button
+                          key={tab}
+                          type="button"
+                          onClick={() => setSearchFilter(tab)}
+                          className={`min-h-10 rounded-xl px-4 py-2 text-sm font-medium transition ${
+                            active
+                              ? 'bg-white text-black'
+                              : 'text-white/55 hover:bg-white/[0.06] hover:text-white'
+                          }`}
+                        >
+                          {tab}
+                        </button>
                       )
-                    }
-                    isPlaying={isPlaying}
-                    error={
-                      playerError &&
-                      sameTrack(
-                        song,
-                        currentSong,
-                      )
-                        ? playerError
-                        : ''
-                    }
-                    {...favoriteProps(song)}
-                  />
-                ),
-              )}
-
-              {hasMoreResults ? (
-                <div className="flex flex-col items-center gap-2 pt-3">
-                  {loadMoreError ? (
-                    <p
-                      className="text-sm text-white/50"
-                      role="alert"
-                    >
-                      {loadMoreError}
-                    </p>
-                  ) : null}
-
-                  <button
-                    type="button"
-                    onClick={handleLoadMore}
-                    disabled={isLoadingMore}
-                    aria-busy={isLoadingMore}
-                    className="min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.08] active:scale-95 disabled:cursor-wait disabled:opacity-50"
-                  >
-                    {isLoadingMore
-                      ? 'Loading...'
-                      : loadMoreError
-                        ? 'Try again'
-                        : 'Load more'}
-                  </button>
+                    })}
+                  </div>
                 </div>
-              ) : null}
-            </div>
-          ) : null}
-        </section>
-      ) : (
-        <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-10 text-center">
-          <Search
-            size={22}
-            className="mx-auto text-white/25"
-          />
 
-          <p className="mt-4 text-sm font-medium text-white/70">
-            Search for something to listen to.
-          </p>
+                {showArtists && searchArtistResults.length ? (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-lg font-semibold text-white">
+                        Artists
+                      </h3>
+                      {searchFilter === 'All' ? (
+                        <button
+                          type="button"
+                          onClick={() => setSearchFilter('Artists')}
+                          className="text-xs font-medium text-white/40 transition hover:text-white"
+                        >
+                          Show all
+                        </button>
+                      ) : null}
+                    </div>
 
-          <p className="mt-2 text-xs text-white/40">
-            Results will come from the connected
-            music service.
-          </p>
-        </div>
-      )}
-    </div>
-  )
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                      {searchArtistResults.map((artist) => (
+                        <button
+                          key={artist.id}
+                          type="button"
+                          onClick={() => setSearchFilter('Songs')}
+                          className="group min-w-0 rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-4 text-center transition hover:border-white/[0.14] hover:bg-white/[0.055]"
+                          aria-label={`Show songs by ${artist.name}`}
+                        >
+                          <div className="mx-auto aspect-square w-full max-w-[150px] overflow-hidden rounded-full bg-[#18191d] ring-1 ring-white/[0.08]">
+                            <Artwork
+                              src={artist.artwork}
+                              className="h-full w-full object-cover"
+                              iconSize={28}
+                            />
+                          </div>
+
+                          <p className="mt-3 truncate text-sm font-semibold text-white">
+                            {artist.name}
+                          </p>
+                          <p className="mt-1 text-xs text-white/40">
+                            {artist.songCount}{' '}
+                            {artist.songCount === 1 ? 'song' : 'songs'}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {showAlbums && searchAlbumResults.length ? (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-lg font-semibold text-white">
+                        Albums
+                      </h3>
+                      {searchFilter === 'All' ? (
+                        <button
+                          type="button"
+                          onClick={() => setSearchFilter('Albums')}
+                          className="text-xs font-medium text-white/40 transition hover:text-white"
+                        >
+                          Show all
+                        </button>
+                      ) : (
+                        <span className="text-xs text-white/30">
+                          {searchAlbumResults.length}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                      {searchAlbumResults.map((album) => (
+                        <button
+                          key={albumKey(album)}
+                          type="button"
+                          onClick={() => {
+                            void openAlbum(album)
+                          }}
+                          className="group min-w-0 rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-3 text-left transition hover:border-white/[0.14] hover:bg-white/[0.055]"
+                          aria-label={`Open album ${album.title}`}
+                        >
+                          <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-[#18191d] ring-1 ring-white/[0.08]">
+                            <Artwork
+                              src={album.artwork}
+                              className="absolute inset-0 h-full w-full object-cover"
+                              iconSize={28}
+                            />
+                          </div>
+
+                          <p className="mt-3 truncate text-sm font-semibold text-white">
+                            {album.title}
+                          </p>
+                          <p className="mt-1 truncate text-xs text-white/40">
+                            {album.artist || 'Unknown artist'}
+                            {album.year ? ` · ${album.year}` : ''}
+                          </p>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {showSongs && searchResults.length ? (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-lg font-semibold text-white">
+                        Songs
+                      </h3>
+
+                      <span className="text-xs text-white/30">
+                        {searchResults.length} loaded
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      {searchResults.map((song, index) => (
+                        <SongRow
+                          key={`${song.provider}-${song.id}`}
+                          song={song}
+                          number={index + 1}
+                          onOpenPlayer={handleOpenPlayer}
+                          onMoreOptions={handleSongMoreOptions}
+                          isActive={sameTrack(song, currentSong)}
+                          isLoading={
+                            playerLoading &&
+                            sameTrack(song, currentSong)
+                          }
+                          isPlaying={isPlaying}
+                          error={
+                            playerError &&
+                            sameTrack(song, currentSong)
+                              ? playerError
+                              : ''
+                          }
+                          {...favoriteProps(song)}
+                        />
+                      ))}
+                    </div>
+
+                    {hasMoreResults ? (
+                      <div className="flex flex-col items-center gap-2 pt-3">
+                        {loadMoreError ? (
+                          <p
+                            className="text-sm text-white/50"
+                            role="alert"
+                          >
+                            {loadMoreError}
+                          </p>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          onClick={handleLoadMore}
+                          disabled={isLoadingMore}
+                          aria-busy={isLoadingMore}
+                          className="min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.08] active:scale-95 disabled:cursor-wait disabled:opacity-50"
+                        >
+                          {isLoadingMore
+                            ? 'Loading...'
+                            : loadMoreError
+                              ? 'Try again'
+                              : 'Load more'}
+                        </button>
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+
+                {showPlaylists && searchPlaylistResults.length ? (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-lg font-semibold text-white">
+                        Playlists
+                      </h3>
+                      {searchFilter === 'All' ? (
+                        <button
+                          type="button"
+                          onClick={() => setSearchFilter('Playlists')}
+                          className="text-xs font-medium text-white/40 transition hover:text-white"
+                        >
+                          Show all
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {searchPlaylistResults.map((playlist) => (
+                        <button
+                          key={playlist.id}
+                          type="button"
+                          onClick={() => openPlaylist(playlist)}
+                          className="flex min-w-0 items-center gap-4 rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-4 text-left transition hover:border-white/[0.14] hover:bg-white/[0.055]"
+                        >
+                          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white">
+                            <ListMusic size={25} />
+                          </div>
+
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-white">
+                              {playlist.title || playlist.name || 'Untitled playlist'}
+                            </p>
+                            <p className="mt-1 text-xs text-white/40">
+                              {Array.isArray(playlist.songs)
+                                ? playlist.songs.length
+                                : 0}{' '}
+                              {Array.isArray(playlist.songs) &&
+                              playlist.songs.length === 1
+                                ? 'song'
+                                : 'songs'}
+                            </p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {!hasVisibleResults && searchStatus !== 'loading' ? (
+                  <div className="rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-8 text-center">
+                    <p className="text-sm text-white/60">
+                      No {searchFilter.toLowerCase()} found for “{submittedQuery}”.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : (
+          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-10 text-center">
+            <Search
+              size={22}
+              className="mx-auto text-white/25"
+            />
+
+            <p className="mt-4 text-sm font-medium text-white/70">
+              Search for something to listen to.
+            </p>
+
+            <p className="mt-2 text-xs text-white/40">
+              Results will come from the connected
+              music service.
+            </p>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   /*
    * =========================================================
@@ -1804,21 +2631,21 @@ function App() {
                 <div className="mt-3 flex items-center gap-2 border-t border-white/[0.06] pt-3">
                   <button
                     type="button"
-                    onClick={() => handleRenamePlaylist(playlist)}
+                    onClick={() => openEditPlaylistDialog(playlist)}
                     className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] text-white/55 transition hover:bg-white/[0.06] hover:text-white"
                   >
                     Rename
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleEditPlaylistDescription(playlist)}
+                    onClick={() => openEditPlaylistDialog(playlist)}
                     className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] text-white/55 transition hover:bg-white/[0.06] hover:text-white"
                   >
                     Description
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleDeletePlaylist(playlist)}
+                    onClick={() => openDeletePlaylistDialog(playlist)}
                     className="ml-auto rounded-full border border-red-400/15 px-3 py-1.5 text-[11px] text-red-300/70 transition hover:bg-red-400/[0.08] hover:text-red-200"
                   >
                     Delete
@@ -2440,21 +3267,21 @@ function App() {
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleRenamePlaylist(playlist)}
+                  onClick={() => openEditPlaylistDialog(playlist)}
                   className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/55 transition hover:bg-white/[0.06] hover:text-white"
                 >
                   Rename
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleEditPlaylistDescription(playlist)}
+                  onClick={() => openEditPlaylistDialog(playlist)}
                   className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/55 transition hover:bg-white/[0.06] hover:text-white"
                 >
                   Edit description
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleDeletePlaylist(playlist)}
+                  onClick={() => openDeletePlaylistDialog(playlist)}
                   className="rounded-full border border-red-400/15 px-3 py-1.5 text-xs text-red-300/70 transition hover:bg-red-400/[0.08] hover:text-red-200"
                 >
                   Delete playlist
@@ -2653,10 +3480,6 @@ function App() {
                     event.preventDefault()
                     handleCreatePlaylist()
                   }
-
-                  if (event.key === 'Escape') {
-                    closePlaylistModal()
-                  }
                 }}
                 placeholder="My playlist"
                 maxLength={60}
@@ -2817,6 +3640,10 @@ function App() {
       return renderSelectedPlaylist()
     }
 
+    if (activeTab === 'Album') {
+      return renderSelectedAlbum()
+    }
+
     if (activeTab === 'Player') {
       return renderPlayerScreen()
     }
@@ -2907,6 +3734,7 @@ function App() {
       />
 
       {renderPlaylistModal()}
+      {renderPlaylistEditDialog()}
 
       {!isQueueOpen &&
       !isLyricsOpen &&

@@ -1,4 +1,4 @@
-import { Search, Bell } from 'lucide-react'
+import { Bell } from 'lucide-react'
 import logo from '../assets/logo.png'
 
 function getInitial(name = '') {
@@ -13,8 +13,6 @@ function getInitial(name = '') {
 
 function TopBar({
   title,
-  searchValue,
-  onOpenSearch,
   profileName = 'User',
   user = null,
 }) {
@@ -50,21 +48,7 @@ function TopBar({
         </div>
 
         {/* Right */}
-        <div className="flex flex-1 items-center justify-end gap-2 sm:gap-3">
-          {/* Search */}
-          <button
-            type="button"
-            onClick={onOpenSearch}
-            className="flex min-h-10 items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.035] px-3 text-sm text-white/55 transition hover:border-white/[0.12] hover:bg-white/[0.06] hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7567F8]/50 sm:min-w-[180px]"
-            aria-label="Open music search"
-          >
-            <Search size={16} />
-
-            <span className="hidden sm:block">
-              {searchValue || 'Search'}
-            </span>
-          </button>
-
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Notifications */}
           <button
             type="button"
@@ -97,3 +81,4 @@ function TopBar({
 }
 
 export default TopBar
+

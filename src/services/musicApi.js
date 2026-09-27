@@ -15,9 +15,12 @@ export class MusicApiError extends Error {
 
 const validateProvider = (provider) => {
   if (!SUPPORTED_PROVIDERS.has(provider)) {
-    throw new MusicApiError(`Unsupported music provider: ${provider}`, {
-      code: 'UNSUPPORTED_PROVIDER',
-    })
+    throw new MusicApiError(
+      `Unsupported music provider: ${provider}`,
+      {
+        code: 'UNSUPPORTED_PROVIDER',
+      },
+    )
   }
 }
 
@@ -34,10 +37,13 @@ const request = async (path) => {
     try {
       payload = await response.json()
     } catch {
-      throw new MusicApiError('JioSaavn API returned an invalid response', {
-        status: response.status,
-        code: 'INVALID_RESPONSE',
-      })
+      throw new MusicApiError(
+        'JioSaavn API returned an invalid response',
+        {
+          status: response.status,
+          code: 'INVALID_RESPONSE',
+        },
+      )
     }
 
     if (!response.ok) {
@@ -57,9 +63,12 @@ const request = async (path) => {
       throw error
     }
 
-    throw new MusicApiError('JioSaavn API is unavailable', {
-      code: 'NETWORK_ERROR',
-    })
+    throw new MusicApiError(
+      'JioSaavn API is unavailable',
+      {
+        code: 'NETWORK_ERROR',
+      },
+    )
   }
 }
 
@@ -69,8 +78,12 @@ const getImage = (images = []) => {
   }
 
   return (
-    images.find((image) => image?.quality === '500x500')?.url ||
-    images.find((image) => image?.quality === '150x150')?.url ||
+    images.find(
+      (image) => image?.quality === '500x500',
+    )?.url ||
+    images.find(
+      (image) => image?.quality === '150x150',
+    )?.url ||
     images.find((image) => image?.url)?.url ||
     null
   )
@@ -79,7 +92,10 @@ const getImage = (images = []) => {
 const getArtistName = (song) => {
   const primaryArtists = song?.artists?.primary
 
-  if (Array.isArray(primaryArtists) && primaryArtists.length > 0) {
+  if (
+    Array.isArray(primaryArtists) &&
+    primaryArtists.length > 0
+  ) {
     return primaryArtists
       .map((artist) => artist?.name)
       .filter(Boolean)
@@ -104,7 +120,9 @@ const selectStreamUrl = (downloadUrl = []) => {
 
   for (const quality of preferredQualities) {
     const match = downloadUrl.find(
-      (item) => item?.quality === quality && item?.url,
+      (item) =>
+        item?.quality === quality &&
+        item?.url,
     )
 
     if (match?.url) {
@@ -112,33 +130,48 @@ const selectStreamUrl = (downloadUrl = []) => {
     }
   }
 
-  return downloadUrl.find((item) => item?.url)?.url || null
+  return (
+    downloadUrl.find((item) => item?.url)?.url ||
+    null
+  )
 }
 
 const normalizeSong = (song) => {
   if (!song || typeof song !== 'object') {
-    throw new MusicApiError('JioSaavn returned an invalid song', {
-      code: 'INVALID_TRACK',
-    })
+    throw new MusicApiError(
+      'JioSaavn returned an invalid song',
+      {
+        code: 'INVALID_TRACK',
+      },
+    )
   }
 
-  const id = song.id != null ? String(song.id) : ''
-  const title = song.name != null ? String(song.name) : ''
+  const id =
+    song.id != null ? String(song.id) : ''
+
+  const title =
+    song.name != null ? String(song.name) : ''
 
   if (!id || !title) {
-    throw new MusicApiError('JioSaavn returned an invalid song', {
-      code: 'INVALID_TRACK',
-    })
+    throw new MusicApiError(
+      'JioSaavn returned an invalid song',
+      {
+        code: 'INVALID_TRACK',
+      },
+    )
   }
 
-  const streamUrl = selectStreamUrl(song.downloadUrl)
+  const streamUrl = selectStreamUrl(
+    song.downloadUrl,
+  )
 
   return {
     id,
     provider: 'jiosaavn',
     title,
     artist: getArtistName(song),
-    album: song.album?.name || 'Unknown album',
+    album:
+      song.album?.name || 'Unknown album',
     artwork: getImage(song.image),
     duration: Number(song.duration) || 0,
     playable: Boolean(streamUrl),
@@ -146,53 +179,198 @@ const normalizeSong = (song) => {
     url: song.url || null,
     year: song.year || null,
     language: song.language || null,
-    explicitContent: Boolean(song.explicitContent),
+    explicitContent: Boolean(
+      song.explicitContent,
+    ),
   }
 }
 
 const normalizeAlbum = (album) => {
   if (!album || typeof album !== 'object') {
-    throw new MusicApiError('JioSaavn returned an invalid album', {
-      code: 'INVALID_ALBUM',
-    })
+    throw new MusicApiError(
+      'JioSaavn returned an invalid album',
+      {
+        code: 'INVALID_ALBUM',
+      },
+    )
   }
 
-  const id = album.id != null ? String(album.id) : ''
-  const title = album.title != null ? String(album.title) : ''
+  const id =
+    album.id != null
+      ? String(album.id)
+      : ''
+
+  const title =
+    album.title != null
+      ? String(album.title)
+      : ''
 
   if (!id || !title) {
-    throw new MusicApiError('JioSaavn returned an invalid album', {
-      code: 'INVALID_ALBUM',
-    })
+    throw new MusicApiError(
+      'JioSaavn returned an invalid album',
+      {
+        code: 'INVALID_ALBUM',
+      },
+    )
   }
 
   return {
     id,
     provider: 'jiosaavn',
     title,
-    artist: album.artist || 'Unknown artist',
+    artist:
+      typeof album.artist === 'string'
+        ? album.artist
+        : album.artist?.name ||
+          'Unknown artist',
     artwork: getImage(album.image),
     url: album.url || null,
     type: album.type || 'album',
-    description: album.description || null,
-    year: album.year ? Number(album.year) : null,
-    language: album.language || null,
-    songIds: Array.isArray(album.songIds) ? album.songIds : [],
+    description:
+      album.description || null,
+    year: album.year
+      ? Number(album.year)
+      : null,
+    language:
+      album.language || null,
+    songIds: Array.isArray(album.songIds)
+      ? album.songIds
+      : [],
   }
 }
 
 /**
- * Search songs
+ * Normalize an artist returned by JioSaavn.
+ */
+const normalizeArtist = (artist) => {
+  if (!artist || typeof artist !== 'object') {
+    throw new MusicApiError(
+      'JioSaavn returned an invalid artist',
+      {
+        code: 'INVALID_ARTIST',
+      },
+    )
+  }
+
+  const id =
+    artist.id != null
+      ? String(artist.id)
+      : ''
+
+  const name =
+    artist.name != null
+      ? String(artist.name)
+      : ''
+
+  if (!id || !name) {
+    throw new MusicApiError(
+      'JioSaavn returned an invalid artist',
+      {
+        code: 'INVALID_ARTIST',
+      },
+    )
+  }
+
+  return {
+    id,
+    provider: 'jiosaavn',
+    name,
+    title: name,
+    artwork:
+      getImage(artist.image) ||
+      artist.image ||
+      null,
+    url: artist.url || null,
+    type: 'artist',
+    role: artist.role || null,
+    description:
+      artist.description || null,
+  }
+}
+
+/**
+ * Normalize a playlist returned by JioSaavn.
+ */
+const normalizePlaylist = (playlist) => {
+  if (
+    !playlist ||
+    typeof playlist !== 'object'
+  ) {
+    throw new MusicApiError(
+      'JioSaavn returned an invalid playlist',
+      {
+        code: 'INVALID_PLAYLIST',
+      },
+    )
+  }
+
+  const id =
+    playlist.id != null
+      ? String(playlist.id)
+      : ''
+
+  const title =
+    playlist.title ??
+    playlist.name ??
+    ''
+
+  if (!id || !title) {
+    throw new MusicApiError(
+      'JioSaavn returned an invalid playlist',
+      {
+        code: 'INVALID_PLAYLIST',
+      },
+    )
+  }
+
+  return {
+    id,
+    provider: 'jiosaavn',
+    title: String(title),
+    name: String(title),
+    artwork: getImage(
+      playlist.image,
+    ) ||
+      playlist.image ||
+      null,
+    url: playlist.url || null,
+    type: 'playlist',
+    description:
+      playlist.description || null,
+    language:
+      playlist.language || null,
+    songIds: Array.isArray(
+      playlist.songIds,
+    )
+      ? playlist.songIds
+      : [],
+    songCount:
+      Number(
+        playlist.songCount ??
+          playlist.song_count,
+      ) || 0,
+  }
+}
+
+/**
+ * Search songs.
  */
 export const searchMusic = async (
   query,
   provider = 'jiosaavn',
   options = {},
 ) => {
-  if (!query || typeof query !== 'string' || !query.trim()) {
-    throw new MusicApiError('A search query is required', {
-      code: 'MISSING_QUERY',
-    })
+  if (
+    !query ||
+    typeof query !== 'string' ||
+    !query.trim()
+  ) {
+    throw new MusicApiError(
+      'A search query is required',
+      {
+        code: 'MISSING_QUERY',
+      },
+    )
   }
 
   validateProvider(provider)
@@ -202,11 +380,17 @@ export const searchMusic = async (
   })
 
   if (options.limit !== undefined) {
-    params.set('limit', String(options.limit))
+    params.set(
+      'limit',
+      String(options.limit),
+    )
   }
 
   if (options.page !== undefined) {
-    params.set('page', String(options.page))
+    params.set(
+      'page',
+      String(options.page),
+    )
   }
 
   const payload = await request(
@@ -217,7 +401,9 @@ export const searchMusic = async (
     !payload ||
     payload.success !== true ||
     !payload.data ||
-    !Array.isArray(payload.data.results)
+    !Array.isArray(
+      payload.data.results,
+    )
   ) {
     throw new MusicApiError(
       'JioSaavn returned invalid song search results',
@@ -230,22 +416,36 @@ export const searchMusic = async (
   return {
     provider: 'jiosaavn',
     query: query.trim(),
-    results: payload.data.results.map(normalizeSong),
+    total:
+      Number(payload.data.total) || 0,
+    start:
+      Number(payload.data.start) || 0,
+    results:
+      payload.data.results.map(
+        normalizeSong,
+      ),
   }
 }
 
 /**
- * Search albums
+ * Search albums.
  */
 export const searchAlbums = async (
   query,
   provider = 'jiosaavn',
   options = {},
 ) => {
-  if (!query || typeof query !== 'string' || !query.trim()) {
-    throw new MusicApiError('An album search query is required', {
-      code: 'MISSING_QUERY',
-    })
+  if (
+    !query ||
+    typeof query !== 'string' ||
+    !query.trim()
+  ) {
+    throw new MusicApiError(
+      'An album search query is required',
+      {
+        code: 'MISSING_QUERY',
+      },
+    )
   }
 
   validateProvider(provider)
@@ -255,11 +455,17 @@ export const searchAlbums = async (
   })
 
   if (options.limit !== undefined) {
-    params.set('limit', String(options.limit))
+    params.set(
+      'limit',
+      String(options.limit),
+    )
   }
 
   if (options.page !== undefined) {
-    params.set('page', String(options.page))
+    params.set(
+      'page',
+      String(options.page),
+    )
   }
 
   const payload = await request(
@@ -270,12 +476,15 @@ export const searchAlbums = async (
     !payload ||
     payload.success !== true ||
     !payload.data ||
-    !Array.isArray(payload.data.results)
+    !Array.isArray(
+      payload.data.results,
+    )
   ) {
     throw new MusicApiError(
       'JioSaavn returned invalid album search results',
       {
-        code: 'INVALID_ALBUM_SEARCH_RESPONSE',
+        code:
+          'INVALID_ALBUM_SEARCH_RESPONSE',
       },
     )
   }
@@ -283,28 +492,200 @@ export const searchAlbums = async (
   return {
     provider: 'jiosaavn',
     query: query.trim(),
-    total: Number(payload.data.total) || 0,
-    start: Number(payload.data.start) || 0,
-    results: payload.data.results.map(normalizeAlbum),
+    total:
+      Number(payload.data.total) || 0,
+    start:
+      Number(payload.data.start) || 0,
+    results:
+      payload.data.results.map(
+        normalizeAlbum,
+      ),
   }
 }
 
 /**
- * Get a single album by ID or JioSaavn link
+ * Search artists.
+ *
+ * Uses the backend's dedicated:
+ * /api/search/artists
+ */
+export const searchArtists = async (
+  query,
+  provider = 'jiosaavn',
+  options = {},
+) => {
+  if (
+    !query ||
+    typeof query !== 'string' ||
+    !query.trim()
+  ) {
+    throw new MusicApiError(
+      'An artist search query is required',
+      {
+        code: 'MISSING_QUERY',
+      },
+    )
+  }
+
+  validateProvider(provider)
+
+  const params = new URLSearchParams({
+    query: query.trim(),
+  })
+
+  if (options.limit !== undefined) {
+    params.set(
+      'limit',
+      String(options.limit),
+    )
+  }
+
+  if (options.page !== undefined) {
+    params.set(
+      'page',
+      String(options.page),
+    )
+  }
+
+  const payload = await request(
+    `/api/search/artists?${params.toString()}`,
+  )
+
+  if (
+    !payload ||
+    payload.success !== true ||
+    !payload.data ||
+    !Array.isArray(
+      payload.data.results,
+    )
+  ) {
+    throw new MusicApiError(
+      'JioSaavn returned invalid artist search results',
+      {
+        code:
+          'INVALID_ARTIST_SEARCH_RESPONSE',
+      },
+    )
+  }
+
+  return {
+    provider: 'jiosaavn',
+    query: query.trim(),
+    total:
+      Number(payload.data.total) || 0,
+    start:
+      Number(payload.data.start) || 0,
+    results:
+      payload.data.results.map(
+        normalizeArtist,
+      ),
+  }
+}
+
+/**
+ * Search playlists.
+ *
+ * Uses the backend's dedicated:
+ * /api/search/playlists
+ */
+export const searchPlaylists = async (
+  query,
+  provider = 'jiosaavn',
+  options = {},
+) => {
+  if (
+    !query ||
+    typeof query !== 'string' ||
+    !query.trim()
+  ) {
+    throw new MusicApiError(
+      'A playlist search query is required',
+      {
+        code: 'MISSING_QUERY',
+      },
+    )
+  }
+
+  validateProvider(provider)
+
+  const params = new URLSearchParams({
+    query: query.trim(),
+  })
+
+  if (options.limit !== undefined) {
+    params.set(
+      'limit',
+      String(options.limit),
+    )
+  }
+
+  if (options.page !== undefined) {
+    params.set(
+      'page',
+      String(options.page),
+    )
+  }
+
+  const payload = await request(
+    `/api/search/playlists?${params.toString()}`,
+  )
+
+  if (
+    !payload ||
+    payload.success !== true ||
+    !payload.data ||
+    !Array.isArray(
+      payload.data.results,
+    )
+  ) {
+    throw new MusicApiError(
+      'JioSaavn returned invalid playlist search results',
+      {
+        code:
+          'INVALID_PLAYLIST_SEARCH_RESPONSE',
+      },
+    )
+  }
+
+  return {
+    provider: 'jiosaavn',
+    query: query.trim(),
+    total:
+      Number(payload.data.total) || 0,
+    start:
+      Number(payload.data.start) || 0,
+    results:
+      payload.data.results.map(
+        normalizePlaylist,
+      ),
+  }
+}
+
+/**
+ * Get a single album by ID or JioSaavn link.
  */
 export const getAlbum = async (
   idOrLink,
   provider = 'jiosaavn',
 ) => {
-  if (!idOrLink || typeof idOrLink !== 'string') {
-    throw new MusicApiError('An album ID or link is required', {
-      code: 'MISSING_ALBUM_ID',
-    })
+  if (
+    !idOrLink ||
+    typeof idOrLink !== 'string'
+  ) {
+    throw new MusicApiError(
+      'An album ID or link is required',
+      {
+        code: 'MISSING_ALBUM_ID',
+      },
+    )
   }
 
   validateProvider(provider)
 
-  const isLink = idOrLink.includes('jiosaavn.com/album/')
+  const isLink =
+    idOrLink.includes(
+      'jiosaavn.com/album/',
+    )
 
   const params = new URLSearchParams()
 
@@ -314,7 +695,9 @@ export const getAlbum = async (
     params.set('id', idOrLink)
   }
 
-  const payload = await request(`/api/albums?${params.toString()}`)
+  const payload = await request(
+    `/api/albums?${params.toString()}`,
+  )
 
   if (
     !payload ||
@@ -336,16 +719,22 @@ export const getAlbum = async (
 }
 
 /**
- * Get a single track
+ * Get a single track.
  */
 export const getTrack = async (
   id,
   provider = 'jiosaavn',
 ) => {
-  if (!id || typeof id !== 'string') {
-    throw new MusicApiError('A track ID is required', {
-      code: 'MISSING_TRACK_ID',
-    })
+  if (
+    !id ||
+    typeof id !== 'string'
+  ) {
+    throw new MusicApiError(
+      'A track ID is required',
+      {
+        code: 'MISSING_TRACK_ID',
+      },
+    )
   }
 
   validateProvider(provider)
@@ -367,7 +756,9 @@ export const getTrack = async (
     )
   }
 
-  const song = Array.isArray(payload.data)
+  const song = Array.isArray(
+    payload.data,
+  )
     ? payload.data[0]
     : payload.data
 
@@ -387,15 +778,21 @@ export const getTrack = async (
 }
 
 /**
- * Get playable stream URL
+ * Get playable stream URL.
  */
 export const getStreamUrl = async (
   id,
   provider = 'jiosaavn',
 ) => {
-  const { track } = await getTrack(id, provider)
+  const { track } = await getTrack(
+    id,
+    provider,
+  )
 
-  if (!track.streamUrl || track.playable !== true) {
+  if (
+    !track.streamUrl ||
+    track.playable !== true
+  ) {
     throw new MusicApiError(
       'Track is not playable',
       {
@@ -415,6 +812,8 @@ export const getStreamUrl = async (
 export const musicApi = {
   searchMusic,
   searchAlbums,
+  searchArtists,
+  searchPlaylists,
   getAlbum,
   getTrack,
   getStreamUrl,
