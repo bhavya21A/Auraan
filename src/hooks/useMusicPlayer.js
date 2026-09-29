@@ -16,6 +16,58 @@ const isVeromeTrack = (track) =>
   track?.provider === VEROME_PROVIDER &&
   Boolean(track?.id)
 
+const parseTrackDuration = (value) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0
+      ? value
+      : 0
+  }
+
+  const text = String(value || '').trim()
+
+  if (!text) {
+    return 0
+  }
+
+  if (text.includes(':')) {
+    const parts = text
+      .split(':')
+      .map((part) => Number(part.trim()))
+
+    if (
+      parts.length === 2 &&
+      Number.isFinite(parts[0]) &&
+      Number.isFinite(parts[1])
+    ) {
+      return Math.max(
+        0,
+        parts[0] * 60 + parts[1],
+      )
+    }
+
+    if (
+      parts.length === 3 &&
+      Number.isFinite(parts[0]) &&
+      Number.isFinite(parts[1]) &&
+      Number.isFinite(parts[2])
+    ) {
+      return Math.max(
+        0,
+        parts[0] * 3600 +
+          parts[1] * 60 +
+          parts[2],
+      )
+    }
+  }
+
+  const numericValue = Number(text)
+
+  return Number.isFinite(numericValue) &&
+    numericValue >= 0
+    ? numericValue
+    : 0
+}
+
 const getStorage = () => {
   try {
     return globalThis.localStorage
@@ -27,6 +79,12 @@ const getStorage = () => {
 const sanitizeTrack = (track) => {
   if (!isRealTrack(track)) return null
 
+  const durationSeconds =
+    parseTrackDuration(
+      track.durationSeconds ??
+        track.duration,
+    )
+
   return {
     ...track,
     id: String(track.id),
@@ -35,11 +93,7 @@ const sanitizeTrack = (track) => {
     artist: track.artist || 'Unknown artist',
     album: track.album || null,
     artwork: track.artwork || null,
-    durationSeconds:
-      Number(
-        track.durationSeconds ??
-          track.duration,
-      ) || 0,
+    durationSeconds,
     playable: track.playable !== false,
   }
 }
@@ -69,17 +123,20 @@ const readPersistedState = () => {
       return emptyState()
     }
 
+    const track =
+      sanitizeTrack(parsed.track)
+
+    const queue = Array.isArray(
+      parsed.queue,
+    )
+      ? parsed.queue
+          .map(sanitizeTrack)
+          .filter(Boolean)
+      : []
+
     return {
-      track: sanitizeTrack(parsed.track),
-
-      queue: Array.isArray(
-        parsed.queue,
-      )
-        ? parsed.queue
-            .map(sanitizeTrack)
-            .filter(Boolean)
-        : [],
-
+      track,
+      queue,
       currentTime:
         Number.isFinite(
           Number(parsed.currentTime),
@@ -230,7 +287,8 @@ export function useMusicPlayer(
         ? [initialRestoredTrack]
         : []
 
-  const audioRef = useRef(null)
+  const audioRef =
+    useRef(null)
 
   const requestIdRef =
     useRef(0)
@@ -281,40 +339,51 @@ export function useMusicPlayer(
   const veromeProgressIntervalRef =
     useRef(null)
 
-  const [currentTrack, setCurrentTrack] =
-    useState(
-      initialRestoredTrack,
-    )
+  const [
+    currentTrack,
+    setCurrentTrack,
+  ] = useState(
+    initialRestoredTrack,
+  )
 
-  const [queue, setQueue] =
-    useState(
-      initialRestoredQueue,
-    )
+  const [
+    queue,
+    setQueue,
+  ] = useState(
+    initialRestoredQueue,
+  )
 
-  const [isPlaying, setIsPlaying] =
-    useState(false)
+  const [
+    isPlaying,
+    setIsPlaying,
+  ] = useState(false)
 
-  const [currentTime, setCurrentTime] =
-    useState(
-      restoredState.currentTime,
-    )
+  const [
+    currentTime,
+    setCurrentTime,
+  ] = useState(
+    restoredState.currentTime,
+  )
 
-  const [duration, setDuration] =
-    useState(
-      Number(
-        initialRestoredTrack?.durationSeconds,
-      ) ||
-        Number(
-          initialRestoredTrack?.duration,
-        ) ||
-        0,
-    )
+  const [
+    duration,
+    setDuration,
+  ] = useState(
+    parseTrackDuration(
+      initialRestoredTrack?.durationSeconds ??
+        initialRestoredTrack?.duration,
+    ),
+  )
 
-  const [isLoading, setIsLoading] =
-    useState(false)
+  const [
+    isLoading,
+    setIsLoading,
+  ] = useState(false)
 
-  const [error, setError] =
-    useState('')
+  const [
+    error,
+    setError,
+  ] = useState('')
 
   const stopVeromeProgress =
     useCallback(() => {
@@ -753,6 +822,20 @@ export function useMusicPlayer(
         )
       }
 
+    const handleWaiting =
+      () => {
+        setIsLoading(
+          true,
+        )
+      }
+
+    const handleCanPlay =
+      () => {
+        setIsLoading(
+          false,
+        )
+      }
+
     const handleEnded =
       () => {
         setIsPlaying(
@@ -807,54 +890,55 @@ export function useMusicPlayer(
         }
       }
 
-    const handleError = () => {
-      const track =
-        currentTrackRef.current
+    const handleError =
+      () => {
+        const track =
+          currentTrackRef.current
 
-      const cacheKey =
-        track
-          ? `${track.provider}:${track.id}`
-          : null
+        const cacheKey =
+          track
+            ? `${track.provider}:${track.id}`
+            : null
 
-      if (
-        track &&
-        cacheKey &&
-        streamCacheRef.current.has(
-          cacheKey,
-        ) &&
-        !retryKeysRef.current.has(
-          cacheKey,
+        if (
+          track &&
+          cacheKey &&
+          streamCacheRef.current.has(
+            cacheKey,
+          ) &&
+          !retryKeysRef.current.has(
+            cacheKey,
+          )
+        ) {
+          retryKeysRef.current.add(
+            cacheKey,
+          )
+
+          streamCacheRef.current.delete(
+            cacheKey,
+          )
+
+          void startTrackRef.current?.(
+            track,
+            true,
+            true,
+          )
+
+          return
+        }
+
+        setIsPlaying(
+          false,
         )
-      ) {
-        retryKeysRef.current.add(
-          cacheKey,
+
+        setIsLoading(
+          false,
         )
 
-        streamCacheRef.current.delete(
-          cacheKey,
+        setError(
+          'Unable to play this track.',
         )
-
-        void startTrackRef.current?.(
-          track,
-          true,
-          true,
-        )
-
-        return
       }
-
-      setIsPlaying(
-        false,
-      )
-
-      setIsLoading(
-        false,
-      )
-
-      setError(
-        'Unable to play this track.',
-      )
-    }
 
     audio.addEventListener(
       'loadedmetadata',
@@ -874,6 +958,16 @@ export function useMusicPlayer(
     audio.addEventListener(
       'pause',
       handlePause,
+    )
+
+    audio.addEventListener(
+      'waiting',
+      handleWaiting,
+    )
+
+    audio.addEventListener(
+      'canplay',
+      handleCanPlay,
     )
 
     audio.addEventListener(
@@ -922,10 +1016,13 @@ export function useMusicPlayer(
         null
 
       audio.pause()
+
       audio.removeAttribute(
         'src',
       )
+
       audio.load()
+
       audioRef.current =
         null
 
@@ -947,6 +1044,16 @@ export function useMusicPlayer(
       audio.removeEventListener(
         'pause',
         handlePause,
+      )
+
+      audio.removeEventListener(
+        'waiting',
+        handleWaiting,
+      )
+
+      audio.removeEventListener(
+        'canplay',
+        handleCanPlay,
       )
 
       audio.removeEventListener(
@@ -1038,13 +1145,10 @@ export function useMusicPlayer(
           )
 
           setDuration(
-            Number(
-              track.durationSeconds,
-            ) ||
-              Number(
+            parseTrackDuration(
+              track.durationSeconds ??
                 track.duration,
-              ) ||
-              0,
+            ),
           )
 
           setIsLoading(
@@ -1200,13 +1304,10 @@ export function useMusicPlayer(
         )
 
         setDuration(
-          Number(
-            track.durationSeconds,
-          ) ||
-            Number(
+          parseTrackDuration(
+            track.durationSeconds ??
               track.duration,
-            ) ||
-            0,
+          ),
         )
 
         setIsLoading(
@@ -1347,52 +1448,76 @@ export function useMusicPlayer(
   useEffect(() => {
     startTrackRef.current =
       startTrack
-  }, [startTrack])
+  }, [
+    startTrack,
+  ])
 
-  const playTrack = async (
-    track,
-    additionalTracks = [],
-  ) => {
-    if (!isRealTrack(track)) {
-      return
+  /*
+   * playTrack
+   *
+   * replaceQueue = false
+   * -> keep the existing queue and add the track(s)
+   *
+   * replaceQueue = true
+   * -> completely replace the queue
+   *    with additionalTracks + track
+   *
+   * This is what Play Album will use.
+   */
+  const playTrack =
+    async (
+      track,
+      additionalTracks = [],
+      replaceQueue = false,
+    ) => {
+      if (!isRealTrack(track)) {
+        return
+      }
+
+      const sourceTracks =
+        replaceQueue
+          ? additionalTracks
+          : [
+              ...queueRef.current,
+              ...additionalTracks,
+            ]
+
+      const uniqueTracks = [
+        ...sourceTracks,
+        track,
+      ].filter(
+        (item, index, items) =>
+          items.findIndex(
+            (candidate) =>
+              candidate.provider ===
+                item.provider &&
+              candidate.id ===
+                item.id,
+          ) ===
+          index,
+      )
+
+      queueRef.current =
+        uniqueTracks
+
+      setQueue(
+        uniqueTracks,
+      )
+
+      restorePositionRef.current =
+        0
+
+      persistState(
+        track,
+        uniqueTracks,
+        0,
+      )
+
+      await startTrack(
+        track,
+        true,
+      )
     }
-
-    const uniqueTracks = [
-      ...queueRef.current,
-      ...additionalTracks,
-      track,
-    ].filter(
-      (item, index, items) =>
-        items.findIndex(
-          (candidate) =>
-            candidate.provider ===
-              item.provider &&
-            candidate.id ===
-              item.id,
-        ) === index,
-    )
-
-    queueRef.current =
-      uniqueTracks
-
-    setQueue(
-      uniqueTracks,
-    )
-
-    restorePositionRef.current =
-      0
-
-    persistState(
-      track,
-      uniqueTracks,
-      0,
-    )
-
-    await startTrack(
-      track,
-      true,
-    )
-  }
 
   const togglePlay =
     async () => {
@@ -1421,6 +1546,7 @@ export function useMusicPlayer(
             track,
             true,
           )
+
           return
         }
 
@@ -1433,6 +1559,7 @@ export function useMusicPlayer(
             1
           ) {
             player.pauseVideo()
+
             return
           }
 
@@ -1464,6 +1591,7 @@ export function useMusicPlayer(
           track,
           true,
         )
+
         return
       }
 
@@ -1520,6 +1648,7 @@ export function useMusicPlayer(
           next,
           true,
         )
+
         return
       }
 
@@ -1565,7 +1694,8 @@ export function useMusicPlayer(
           !Number.isFinite(
             nextTime,
           ) ||
-          nextTime < 0
+          nextTime <
+            0
         ) {
           return
         }
@@ -1585,7 +1715,8 @@ export function useMusicPlayer(
           const playerDuration =
             Number(
               player.getDuration(),
-            ) || duration
+            ) ||
+            duration
 
           if (
             !Number.isFinite(
@@ -1670,20 +1801,25 @@ export function useMusicPlayer(
           audio.currentTime,
         )
       },
-      [duration],
+      [
+        duration,
+      ],
     )
 
   const previousTrack =
     useCallback(
       async () => {
-        const position =
+        const currentPosition =
           getCurrentPlaybackTime()
 
         if (
-          position >
+          currentPosition >
           3
         ) {
-          seekTo(0)
+          seekTo(
+            0,
+          )
+
           return
         }
 
@@ -1715,10 +1851,13 @@ export function useMusicPlayer(
             previous,
             true,
           )
+
           return
         }
 
-        seekTo(0)
+        seekTo(
+          0,
+        )
       },
       [
         getCurrentPlaybackTime,
