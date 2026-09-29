@@ -17,7 +17,6 @@ const navItems = [
   { id: 'Library', icon: Library, label: 'Library' },
 ]
 
-
 function getInitial(name = '') {
   const value = String(name).trim()
 
@@ -96,10 +95,10 @@ function DesktopSidebar({
       {/* Brand */}
       <div className="mb-9 flex items-center gap-3">
         <img
-        src={logo}
-        alt="AURAAN"
-        className="h-11 w-11 shrink-0 rounded-2xl object-contain"
-      />
+          src={logo}
+          alt="AURAAN"
+          className="h-11 w-11 shrink-0 rounded-2xl object-contain"
+        />
 
         <div>
           <h2 className="text-xl font-semibold tracking-[-0.03em] text-white">
@@ -155,6 +154,14 @@ function DesktopSidebar({
               ? playlist.songs.length
               : Number(playlist.totalSongs) || 0
 
+            const playlistCover =
+              playlist.cover_url ||
+              playlist.coverUrl ||
+              playlist.cover ||
+              playlist.artwork ||
+              playlist.image ||
+              null
+
             return (
               <button
                 key={playlist.id}
@@ -171,12 +178,25 @@ function DesktopSidebar({
                     : 'border-white/[0.05] bg-white/[0.02] hover:border-white/[0.08] hover:bg-white/[0.04]'
                 }`}
               >
+                {/* Playlist cover */}
                 <div
-                  className={`h-9 w-9 shrink-0 rounded-xl bg-gradient-to-br ${
+                  className={`h-9 w-9 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br ${
                     playlist.accent ||
                     'from-[#7567F8] to-[#9B94FF]'
                   }`}
-                />
+                >
+                  {playlistCover ? (
+                    <img
+                      src={playlistCover}
+                      alt=""
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                      onError={(event) => {
+                        event.currentTarget.style.display = 'none'
+                      }}
+                    />
+                  ) : null}
+                </div>
 
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-white">

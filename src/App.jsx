@@ -8,6 +8,8 @@ import {
   Heart,
   ListMusic,
   MoreHorizontal,
+  Trash2,
+  Upload,
   Pause,
   Play,
   Plus,
@@ -86,22 +88,75 @@ const dedupeAlbums = (albums) =>
       ) === index,
   )
 
-function formatTrackDuration(seconds) {
-  const value = Number(seconds)
+function parseTrackDuration(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0
+      ? value
+      : 0
+  }
 
-  if (!Number.isFinite(value) || value < 0) {
+  const text = String(value || '').trim()
+
+  if (!text) {
+    return 0
+  }
+
+  if (text.includes(':')) {
+    const parts = text
+      .split(':')
+      .map((part) => Number(part.trim()))
+
+    if (
+      parts.length === 2 &&
+      Number.isFinite(parts[0]) &&
+      Number.isFinite(parts[1])
+    ) {
+      return Math.max(
+        0,
+        parts[0] * 60 + parts[1],
+      )
+    }
+
+    if (
+      parts.length === 3 &&
+      Number.isFinite(parts[0]) &&
+      Number.isFinite(parts[1]) &&
+      Number.isFinite(parts[2])
+    ) {
+      return Math.max(
+        0,
+        parts[0] * 3600 +
+          parts[1] * 60 +
+          parts[2],
+      )
+    }
+  }
+
+  const numericValue = Number(text)
+
+  return Number.isFinite(numericValue) && numericValue >= 0
+    ? numericValue
+    : 0
+}
+
+function formatTrackDuration(value) {
+  const totalSeconds = parseTrackDuration(value)
+
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
     return '--:--'
   }
 
-  return `${Math.floor(value / 60)}:${Math.floor(
-    value % 60,
+  return `${Math.floor(totalSeconds / 60)}:${Math.floor(
+    totalSeconds % 60,
   )
     .toString()
     .padStart(2, '0')}`
 }
 
 function toUiSong(track) {
-  const duration = Number(track.duration)
+  const durationSeconds = parseTrackDuration(
+    track.durationSeconds ?? track.duration,
+  )
 
   return {
     ...track,
@@ -110,11 +165,8 @@ function toUiSong(track) {
     album: track.album || null,
     artwork: track.artwork || null,
     provider: track.provider || DEFAULT_PROVIDER,
-    duration: formatTrackDuration(duration),
-    durationSeconds:
-      Number.isFinite(duration) && duration >= 0
-        ? duration
-        : 0,
+    duration: formatTrackDuration(durationSeconds),
+    durationSeconds,
     playable: track.playable !== false,
     cover: '',
   }
@@ -201,6 +253,170 @@ function normalizeSearchAlbum(album) {
       yearMatch?.[0] ||
       null,
     songCount,
+  }
+}
+
+
+function normalizeVeromeArtist(artist) {
+  if (!artist || typeof artist !== 'object') return null
+
+  const id =
+    artist.id != null
+      ? String(artist.id)
+      : artist.browseId != null
+        ? String(artist.browseId)
+        : artist.artistId != null
+          ? String(artist.artistId)
+          : ''
+
+  const name = String(
+    artist.name ||
+      artist.title ||
+      artist.artistName ||
+      '',
+  ).trim()
+
+  if (!id || !name) return null
+
+  const artwork =
+    artist.artwork ||
+    artist.image ||
+    artist.thumbnail ||
+    (Array.isArray(artist.thumbnails)
+      ? artist.thumbnails.find((item) => item?.url)?.url
+      : null) ||
+    null
+
+  return {
+    ...artist,
+    id,
+    provider: 'verome',
+    name,
+    artwork,
+    subtitle:
+      artist.subtitle ||
+      artist.description ||
+      '',
+    description:
+      artist.description ||
+      '',
+    subscribers:
+      artist.subscribers ||
+      artist.monthlyAudience ||
+      '',
+  }
+}
+
+function normalizeVeromeSong(track) {
+  if (!track || typeof track !== 'object') return null
+
+  const rawId =
+    track.videoId ??
+    track.id ??
+    track.browseId ??
+    ''
+
+  const id = String(rawId || '').trim()
+
+  const title = String(
+    track.title ||
+      track.name ||
+      track.trackName ||
+      '',
+  ).trim()
+
+  const artistEntries = Array.isArray(track.artists)
+    ? track.artists
+        .map((artist) => {
+          if (typeof artist === 'string') {
+            return {
+              name: artist,
+              id: '',
+            }
+          }
+
+          return {
+            name:
+              artist?.name ||
+              artist?.title ||
+              '',
+            id:
+              artist?.id ||
+              artist?.browseId ||
+              '',
+          }
+        })
+        .filter((artist) => artist.name)
+    : []
+
+  const primaryArtist = artistEntries[0] || null
+
+  const artist = String(
+    typeof track.artist === 'string'
+      ? track.artist
+      : track.artist?.name ||
+          track.artist?.title ||
+          primaryArtist?.name ||
+          '',
+  ).trim()
+
+  const album =
+    typeof track.album === 'string'
+      ? track.album
+      : track.album?.name ||
+        track.album?.title ||
+        track.albumName ||
+        null
+
+  const albumId =
+    track.album?.id != null
+      ? String(track.album.id)
+      : track.album?.browseId != null
+        ? String(track.album.browseId)
+        : track.albumId != null
+          ? String(track.albumId)
+          : ''
+
+  const artwork =
+    track.artwork ||
+    track.image ||
+    track.thumbnail ||
+    (Array.isArray(track.thumbnails)
+      ? track.thumbnails.find((item) => item?.url)?.url
+      : null) ||
+    null
+
+  const duration =
+    track.duration ??
+    track.duration_seconds ??
+    track.durationSeconds ??
+    0
+
+  if (!id || !title) return null
+
+  return {
+    ...track,
+    id,
+    playbackId: String(track.videoId || id),
+    provider: 'verome',
+    title,
+    artist: artist || 'Unknown artist',
+    artistId: primaryArtist?.id
+      ? String(primaryArtist.id)
+      : '',
+    album,
+    albumId: albumId || null,
+    albumUrl:
+      track.album?.url ||
+      track.albumUrl ||
+      null,
+    artwork,
+    duration,
+    durationSeconds: parseTrackDuration(duration),
+    playable:
+      Boolean(track.videoId || id) &&
+      track.isAvailable !== false &&
+      track.playable !== false,
   }
 }
 
@@ -446,6 +662,9 @@ function App() {
   const [playlistError, setPlaylistError] =
     useState('')
 
+  const [playlistCoverUploading, setPlaylistCoverUploading] =
+    useState(false)
+
   const [playlistDialog, setPlaylistDialog] = useState({
     open: false,
     mode: null,
@@ -458,6 +677,7 @@ function App() {
   const lastRecordedTrackRef = useRef('')
   const lastRecordedHistoryRef = useRef('')
   const searchInputRef = useRef(null)
+  const playlistCoverInputRef = useRef(null)
 
   const {
     currentTrack: playingTrack,
@@ -667,6 +887,15 @@ function App() {
       ...row,
       title: row.name,
       name: row.name,
+      // Keep the database field and provide the common cover aliases
+      // used by playlist surfaces so the desktop sidebar can render
+      // the same hosted cover as the Library and Edit Playlist views.
+      cover_url: row.cover_url || null,
+      cover: row.cover_url || null,
+      coverUrl: row.cover_url || null,
+      artwork: row.cover_url || null,
+      image: row.cover_url || null,
+      thumbnail: row.cover_url || null,
       songs: songsByPlaylist.get(String(row.id)) || [],
       totalSongs: (songsByPlaylist.get(String(row.id)) || []).length,
     }))
@@ -975,14 +1204,19 @@ function App() {
       const veromeSongResults =
         veromeSearchResults.filter(
           (result) =>
-            result?.type === 'song',
+            result?.type === 'song' ||
+            result?.resultType === 'song',
         )
 
       const veromeArtistResults =
-        veromeSearchResults.filter(
-          (result) =>
-            result?.type === 'artist',
-        )
+        veromeSearchResults
+          .filter(
+            (result) =>
+              result?.type === 'artist' ||
+              result?.resultType === 'artist',
+          )
+          .map(normalizeVeromeArtist)
+          .filter(Boolean)
 
       /*
        * Verome search can return an artist as the top result instead
@@ -1029,6 +1263,21 @@ function App() {
               : [],
         )
 
+      const veromeTracks = dedupeTracks(
+        [
+          ...veromeSongResults
+            .map(normalizeVeromeSong)
+            .filter(Boolean),
+          ...veromeArtistSongResults
+            .map(normalizeVeromeSong)
+            .filter(Boolean),
+        ],
+      ).filter(
+        (track) =>
+          track?.playable !== false &&
+          Boolean(track?.playbackId),
+      )
+
       const veromeArtistAlbumResults =
         veromeArtistDetails.flatMap(
           (detail) => {
@@ -1059,13 +1308,18 @@ function App() {
           },
         )
 
-      const results = dedupeTracks([
-        ...jioTracks.map(toUiSong),
-        ...veromeSongResults.map(toUiSong),
-        ...veromeArtistSongResults.map(
-          toUiSong,
-        ),
-      ])
+      /*
+       * Verome is the primary song source. Keep the song list
+       * exclusively on Verome whenever at least one usable Verome
+       * track is available. JioSaavn is only a fallback when Verome
+       * has no usable songs for this search.
+       */
+      const results =
+        veromeTracks.length > 0
+          ? veromeTracks
+          : dedupeTracks(
+              jioTracks.map(toUiSong),
+            )
 
       const albumResults = dedupeAlbums(
         albumPageResponses
@@ -1140,9 +1394,9 @@ function App() {
       )
 
       const finalAlbums = dedupeAlbums([
-        ...albumResults,
         ...veromeSearchAlbums,
         ...veromeArtistAlbumResults,
+        ...albumResults,
         ...songDerivedAlbums,
       ])
 
@@ -1181,9 +1435,10 @@ function App() {
       }
 
       setHasMoreResults(
-        songsResult.status === 'fulfilled' &&
-        jioTracks.length >=
-          SEARCH_PAGE_SIZE,
+        veromeTracks.length === 0 &&
+          songsResult.status === 'fulfilled' &&
+          jioTracks.length >=
+            SEARCH_PAGE_SIZE,
       )
     } catch {
       if (
@@ -1210,6 +1465,18 @@ function App() {
       !submittedQuery ||
       isLoadingMore ||
       !hasMoreResults
+    ) {
+      return
+    }
+
+    // JioSaavn pagination is only allowed while we are using the
+    // JioSaavn fallback. Never append JioSaavn tracks to a Verome
+    // result set.
+    if (
+      searchResults.some(
+        (track) =>
+          track?.provider === 'verome',
+      )
     ) {
       return
     }
@@ -1355,23 +1622,50 @@ function App() {
   /*
    * Player
    */
-  const handleOpenPlayer = (
-    song,
-    playbackQueue = searchResults,
-  ) => {
-    if (!song) return
+  /*
+   * Play one album as a dedicated queue.
+   * The queue is replaced completely with the album tracks.
+   */
+  const handlePlayAlbum = async (albumSongs) => {
+    const albumQueue = Array.isArray(albumSongs)
+      ? dedupeTracks(
+          albumSongs.filter(Boolean),
+        )
+      : []
 
-    if (
-      song.provider &&
-      song.playable === false
-    ) {
+    if (!albumQueue.length) {
       return
     }
 
-    if (song.provider) {
-      playTrack(song, playbackQueue)
-    }
+    await handleOpenPlayer(
+      albumQueue[0],
+      albumQueue,
+      true,
+    )
   }
+
+  const handleOpenPlayer = (
+  song,
+  playbackQueue = searchResults,
+  replaceQueue = false,
+) => {
+  if (!song) return
+
+  if (
+    song.provider &&
+    song.playable === false
+  ) {
+    return
+  }
+
+  if (song.provider) {
+    playTrack(
+      song,
+      playbackQueue,
+      replaceQueue,
+    )
+  }
+}
 
   /*
    * Favorites
@@ -1563,13 +1857,15 @@ function App() {
 
         const payload = await response.json()
 
-        const albumData =
+                const albumData =
           payload?.album ||
           payload?.data?.album ||
           payload?.data ||
           payload
 
         const rawSongs =
+          (Array.isArray(payload?.tracks) &&
+            payload.tracks) ||
           (Array.isArray(albumData?.tracks) &&
             albumData.tracks) ||
           (Array.isArray(albumData?.songs) &&
@@ -1580,15 +1876,24 @@ function App() {
 
         const artistName =
           album.artist ||
+          payload?.artist?.name ||
+          albumData?.artist?.name ||
           selectedAlbum?.artist ||
           'Unknown artist'
 
         songs = dedupeTracks(
           rawSongs
+            .filter((song) => Boolean(song?.videoId))
+            .sort(
+              (left, right) =>
+                Number(left?.trackNumber || 0) -
+                Number(right?.trackNumber || 0),
+            )
             .map((song) => {
-              if (!song?.videoId) {
-                return null
-              }
+              const duration =
+                song.duration ??
+                song.durationSeconds ??
+                0
 
               return toUiSong({
                 id: String(song.videoId),
@@ -1603,18 +1908,19 @@ function App() {
                   artistName,
                 album:
                   album.title ||
+                  albumData?.title ||
                   null,
                 artwork:
                   song.thumbnail ||
                   song.thumbnails?.[0]?.url ||
+                  album.artwork ||
                   null,
-                duration:
-                  Number(song.duration) ||
-                  0,
+                duration,
+                durationSeconds:
+                  parseTrackDuration(duration),
                 playable: true,
               })
-            })
-            .filter(Boolean),
+            }),
         )
       } else {
         const albumReference =
@@ -1762,12 +2068,20 @@ function App() {
       }
 
       setSelectedArtist(
-        response.artist || artist,
+        normalizeVeromeArtist(
+          response.artist || artist,
+        ) || artist,
       )
 
       setSelectedArtistSongs(
         Array.isArray(response.songs)
-          ? response.songs.map(toUiSong)
+          ? response.songs
+              .map(normalizeVeromeSong)
+              .filter(Boolean)
+              .filter(
+                (song) =>
+                  song.playable !== false,
+              )
           : [],
       )
 
@@ -1901,7 +2215,7 @@ function App() {
 
               <div className="min-w-0">
                 <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/35">
-                  Verome artist
+                  Artist
                 </p>
 
                 <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-5xl">
@@ -2023,8 +2337,7 @@ function App() {
             </div>
 
             <p className="text-xs leading-5 text-white/30">
-              Verome playback uses the visible video
-              player in the Now Playing panel.
+              Video playback appears in the Now Playing panel.
             </p>
           </section>
         ) : null}
@@ -2173,23 +2486,52 @@ function App() {
             </div>
 
             <div className="min-w-0">
-              <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/35">
-                Album
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
-                {selectedAlbum.title}
-              </h1>
-              <p className="mt-3 text-sm text-white/50">
-                {selectedAlbum.artist || 'Unknown artist'}
-                {selectedAlbum.year ? ` · ${selectedAlbum.year}` : ''}
-              </p>
-              {albumStatus === 'success' ? (
-                <p className="mt-2 text-xs text-white/30">
-                  {selectedAlbumSongs.length}{' '}
-                  {selectedAlbumSongs.length === 1 ? 'song' : 'songs'}
-                </p>
-              ) : null}
-            </div>
+  <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/35">
+    Album
+  </p>
+
+  <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
+    {selectedAlbum.title}
+  </h1>
+
+  <p className="mt-3 text-sm text-white/50">
+    {selectedAlbum.artist || 'Unknown artist'}
+    {selectedAlbum.year ? ` · ${selectedAlbum.year}` : ''}
+  </p>
+
+  {albumStatus === 'success' ? (
+    <p className="mt-2 text-xs text-white/30">
+      {selectedAlbumSongs.length}{' '}
+      {selectedAlbumSongs.length === 1 ? 'song' : 'songs'}
+    </p>
+  ) : null}
+
+  {albumStatus === 'success' && selectedAlbumSongs.length ? (
+    <div className="mt-5 flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => {
+          void handlePlayAlbum(
+            selectedAlbumSongs,
+          )
+        }}
+        className="flex min-h-11 items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition hover:bg-white/90 active:scale-95"
+      >
+        <Play size={16} fill="currentColor" />
+        Play album
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setQueueOpen(true)}
+        className="flex min-h-11 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.08] hover:text-white active:scale-95"
+      >
+        <ListMusic size={16} />
+        Queue
+      </button>
+    </div>
+  ) : null}
+</div>
           </div>
         </section>
 
@@ -2331,6 +2673,10 @@ function App() {
     setPlaylistName('')
     setPlaylistDescription('')
     setPlaylistError('')
+    setPlaylistCoverUploading(false)
+    if (playlistCoverInputRef.current) {
+      playlistCoverInputRef.current.value = ''
+    }
     setPlaylistDialog({ open: false, mode: null, playlist: null })
   }
 
@@ -2436,6 +2782,10 @@ function App() {
     setPlaylistName(playlist.name || playlist.title || '')
     setPlaylistDescription(playlist.description || '')
     setPlaylistError('')
+    setPlaylistCoverUploading(false)
+    if (playlistCoverInputRef.current) {
+      playlistCoverInputRef.current.value = ''
+    }
     setPlaylistDialog({
       open: true,
       mode: 'edit',
@@ -2447,6 +2797,7 @@ function App() {
     if (!playlist?.id) return
 
     setPlaylistError('')
+    setPlaylistCoverUploading(false)
     setPlaylistDialog({
       open: true,
       mode: 'delete',
@@ -2459,6 +2810,190 @@ function App() {
     setPlaylistName('')
     setPlaylistDescription('')
     setPlaylistError('')
+    setPlaylistCoverUploading(false)
+    if (playlistCoverInputRef.current) {
+      playlistCoverInputRef.current.value = ''
+    }
+  }
+
+  const getPlaylistCoverStoragePath = (coverUrl) => {
+    if (!coverUrl || typeof coverUrl !== 'string') return null
+
+    const marker = '/storage/v1/object/public/playlist-covers/'
+    const markerIndex = coverUrl.indexOf(marker)
+
+    if (markerIndex === -1) return null
+
+    const rawPath = coverUrl.slice(markerIndex + marker.length)
+    const cleanPath = rawPath.split('?')[0]
+
+    try {
+      return decodeURIComponent(cleanPath)
+    } catch {
+      return cleanPath
+    }
+  }
+
+  const getPlaylistCoverExtension = (file) => {
+    if (file?.type === 'image/png') return 'png'
+    if (file?.type === 'image/webp') return 'webp'
+    return 'jpg'
+  }
+
+  const handlePlaylistCoverChange = async (event) => {
+    const file = event.target.files?.[0]
+    const playlist = playlistDialog.playlist
+
+    if (!file || !playlist?.id || !user?.id) return
+
+    try {
+      setPlaylistError('')
+
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+        throw new Error('Please choose a JPG, PNG, or WebP image.')
+      }
+
+      if (file.size > 5 * 1024 * 1024) {
+        throw new Error('Playlist cover must be 5 MB or smaller.')
+      }
+
+      setPlaylistCoverUploading(true)
+
+      const extension = getPlaylistCoverExtension(file)
+      const uniqueId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const storagePath = `${user.id}/${playlist.id}/${uniqueId}.${extension}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('playlist-covers')
+        .upload(storagePath, file, {
+          cacheControl: '31536000',
+          contentType: file.type,
+          upsert: false,
+        })
+
+      if (uploadError) throw uploadError
+
+      const { data: publicUrlData } = supabase.storage
+        .from('playlist-covers')
+        .getPublicUrl(storagePath)
+
+      const publicUrl = publicUrlData?.publicUrl
+
+      if (!publicUrl) {
+        throw new Error('The cover uploaded, but its public URL could not be created.')
+      }
+
+      const { error: playlistUpdateError } = await supabase
+        .from('playlists')
+        .update({
+          cover_url: publicUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', playlist.id)
+        .eq('user_id', user.id)
+
+      if (playlistUpdateError) {
+        await supabase.storage.from('playlist-covers').remove([storagePath])
+        throw playlistUpdateError
+      }
+
+      const oldCoverPath = getPlaylistCoverStoragePath(playlist.cover_url)
+      const ownPrefix = `${user.id}/`
+
+      if (oldCoverPath && oldCoverPath.startsWith(ownPrefix)) {
+        const { error: removeOldCoverError } = await supabase.storage
+          .from('playlist-covers')
+          .remove([oldCoverPath])
+
+        if (removeOldCoverError) {
+          console.warn('New playlist cover saved, but the old cover could not be removed:', removeOldCoverError)
+        }
+      }
+
+      const updatedAt = new Date().toISOString()
+
+      setPlaylistDialog((current) => ({
+        ...current,
+        playlist: current.playlist
+          ? {
+              ...current.playlist,
+              cover_url: publicUrl,
+              updated_at: updatedAt,
+            }
+          : current.playlist,
+      }))
+
+      await refreshPlaylists()
+    } catch (error) {
+      console.error('Playlist cover upload error:', error)
+      setPlaylistError(error?.message || 'Unable to upload playlist cover.')
+    } finally {
+      setPlaylistCoverUploading(false)
+      if (playlistCoverInputRef.current) {
+        playlistCoverInputRef.current.value = ''
+      }
+    }
+  }
+
+  const handleRemovePlaylistCover = async () => {
+    const playlist = playlistDialog.playlist
+
+    if (!playlist?.id || !user?.id || !playlist.cover_url) return
+
+    try {
+      setPlaylistError('')
+      setPlaylistCoverUploading(true)
+
+      const oldCoverPath = getPlaylistCoverStoragePath(playlist.cover_url)
+      const ownPrefix = `${user.id}/`
+
+      const { error: playlistUpdateError } = await supabase
+        .from('playlists')
+        .update({
+          cover_url: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', playlist.id)
+        .eq('user_id', user.id)
+
+      if (playlistUpdateError) throw playlistUpdateError
+
+      if (oldCoverPath && oldCoverPath.startsWith(ownPrefix)) {
+        const { error: removeCoverError } = await supabase.storage
+          .from('playlist-covers')
+          .remove([oldCoverPath])
+
+        if (removeCoverError) {
+          console.warn('Playlist cover was cleared, but the stored image could not be removed:', removeCoverError)
+        }
+      }
+
+      const updatedAt = new Date().toISOString()
+
+      setPlaylistDialog((current) => ({
+        ...current,
+        playlist: current.playlist
+          ? {
+              ...current.playlist,
+              cover_url: null,
+              updated_at: updatedAt,
+            }
+          : current.playlist,
+      }))
+
+      await refreshPlaylists()
+    } catch (error) {
+      console.error('Remove playlist cover error:', error)
+      setPlaylistError(error?.message || 'Unable to remove playlist cover.')
+    } finally {
+      setPlaylistCoverUploading(false)
+      if (playlistCoverInputRef.current) {
+        playlistCoverInputRef.current.value = ''
+      }
+    }
   }
 
   const handleSavePlaylistDetails = async () => {
@@ -2650,19 +3185,69 @@ function App() {
               </div>
 
               <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white shadow-[0_12px_30px_rgba(117,103,248,0.18)]">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                  <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white shadow-[0_12px_30px_rgba(117,103,248,0.18)]">
                     {playlist?.cover_url ? (
-                      <img src={playlist.cover_url} alt="" className="h-full w-full object-cover" />
+                      <img
+                        src={playlist.cover_url}
+                        alt="Playlist cover preview"
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
-                      <ListMusic size={22} />
+                      <ListMusic size={30} />
                     )}
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-white/80">Playlist artwork</p>
-                    <p className="mt-1 text-xs leading-5 text-white/35">
-                      Custom artwork upload is coming next.
+
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-white/85">
+                      Playlist artwork
                     </p>
+
+                    <p className="mt-1 max-w-md text-xs leading-5 text-white/35">
+                      Upload a square JPG, PNG, or WebP image up to 5 MB.
+                    </p>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <input
+                        ref={playlistCoverInputRef}
+                        id="edit-playlist-cover"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        onChange={(event) => {
+                          void handlePlaylistCoverChange(event)
+                        }}
+                        disabled={playlistCoverUploading}
+                      />
+
+                      <label
+                        htmlFor="edit-playlist-cover"
+                        className={`inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] px-4 py-2 text-xs font-medium text-white/70 transition hover:bg-white/[0.09] hover:text-white ${
+                          playlistCoverUploading
+                            ? 'pointer-events-none opacity-50'
+                            : ''
+                        }`}
+                      >
+                        <Upload size={14} />
+                        {playlistCoverUploading
+                          ? 'Uploading...'
+                          : playlist?.cover_url
+                            ? 'Change cover'
+                            : 'Upload cover'}
+                      </label>
+
+                      {playlist?.cover_url ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleRemovePlaylistCover()}
+                          disabled={playlistCoverUploading}
+                          className="inline-flex min-h-10 items-center gap-2 rounded-full border border-red-400/15 bg-red-400/[0.05] px-4 py-2 text-xs font-medium text-red-200/75 transition hover:bg-red-400/[0.1] hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          <Trash2 size={14} />
+                          Remove cover
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2883,64 +3468,8 @@ function App() {
       'Playlists',
     ]
 
-    const jioArtistResults = []
-    const artistMap = new Map()
-
-    searchResults
-      .filter(
-        (song) =>
-          song?.provider === DEFAULT_PROVIDER,
-      )
-      .forEach((song) => {
-        const artistNames = String(
-          song?.artist || '',
-        )
-          .split(',')
-          .map((name) => name.trim())
-          .filter(Boolean)
-
-        artistNames.forEach((artistName) => {
-          const key =
-            normalizeSearchText(artistName)
-
-          if (
-            !key ||
-            artistMap.has(key)
-          ) {
-            return
-          }
-
-          artistMap.set(key, true)
-
-          jioArtistResults.push({
-            id: `artist-${encodeURIComponent(key)}`,
-            provider: DEFAULT_PROVIDER,
-            name: artistName,
-            artwork:
-              song.artwork || null,
-            songCount: searchResults.filter(
-              (candidate) =>
-                candidate?.provider ===
-                  DEFAULT_PROVIDER &&
-                String(
-                  candidate?.artist || '',
-                )
-                  .split(',')
-                  .map((name) =>
-                    normalizeSearchText(
-                      name,
-                    ),
-                  )
-                  .includes(key),
-            ).length,
-          })
-        })
-      })
-
-    const searchArtistResults = [
-      ...jioArtistResults,
-      ...searchVeromeArtistResults,
-    ]
+    const searchArtistResults =
+    searchVeromeArtistResults
 
     const searchPlaylistResults = playlists.filter((playlist) => {
       const title = normalizeSearchText(
@@ -3130,7 +3659,7 @@ function App() {
                             {artist.provider ===
                             'verome'
                               ? artist.subtitle ||
-                                'Verome artist'
+                                'Artist'
                               : `${artist.songCount} ${
                                   artist.songCount ===
                                   1
@@ -3334,8 +3863,7 @@ function App() {
             </p>
 
             <p className="mt-2 text-xs text-white/40">
-              Results can come from JioSaavn and
-              Verome.
+              Search across your music library.
             </p>
           </div>
         )}
@@ -3445,8 +3973,16 @@ function App() {
                   onClick={() => openPlaylist(playlist)}
                   className="flex w-full items-center gap-3 text-left"
                 >
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white">
-                    <ListMusic size={19} />
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white">
+                    {playlist.cover_url ? (
+                      <img
+                        src={playlist.cover_url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <ListMusic size={19} />
+                    )}
                   </div>
 
                   <div className="min-w-0">
@@ -4133,8 +4669,16 @@ function App() {
               </div>
             </div>
 
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white shadow-[0_16px_40px_rgba(117,103,248,0.2)]">
-              <ListMusic size={25} />
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white shadow-[0_16px_40px_rgba(117,103,248,0.2)] sm:h-24 sm:w-24">
+              {playlist.cover_url ? (
+                <img
+                  src={playlist.cover_url}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <ListMusic size={25} />
+              )}
             </div>
           </div>
         </section>
@@ -4363,8 +4907,16 @@ function App() {
                       }
                       className="flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition hover:bg-white/[0.06]"
                     >
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white">
-                        <ListMusic size={17} />
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-[#7567F8] to-[#9B94FF] text-white">
+                        {playlist.cover_url ? (
+                          <img
+                            src={playlist.cover_url}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <ListMusic size={17} />
+                        )}
                       </div>
 
                       <div className="min-w-0 flex-1">
@@ -4566,13 +5118,6 @@ function App() {
                 </h2>
               </div>
 
-              {currentSong ? (
-                <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-white/40">
-                  {currentSong.provider === 'verome'
-                    ? 'Verome'
-                    : 'JioSaavn'}
-                </span>
-              ) : null}
             </div>
 
             <div className="mt-4 overflow-hidden rounded-[22px] border border-white/[0.08] bg-[#101114] shadow-[0_20px_60px_rgba(0,0,0,0.3)]">
