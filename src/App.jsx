@@ -32,6 +32,7 @@ import ProgressBar from './components/ProgressBar'
 import Artwork from './components/Artwork'
 
 import { getAlbum, searchAlbums, searchMusic } from './services/musicApi'
+import { getVeromeArtist, searchVerome } from './services/veromeApi'
 import { useMusicPlayer } from './hooks/useMusicPlayer'
 
 import {
@@ -122,7 +123,15 @@ function toUiSong(track) {
 function normalizeSearchAlbum(album) {
   if (!album || typeof album !== 'object') return null
 
-  const id = album.id != null ? String(album.id) : ''
+  const id =
+    album.id != null
+      ? String(album.id)
+      : album.browseId != null
+        ? String(album.browseId)
+        : album.albumId != null
+          ? String(album.albumId)
+          : ''
+
   const title = String(
     album.title ||
       album.name ||
@@ -131,6 +140,48 @@ function normalizeSearchAlbum(album) {
   ).trim()
 
   if (!id || !title) return null
+
+  const albumArtists = Array.isArray(album.artists)
+    ? album.artists
+        .map((artist) =>
+          typeof artist === 'string'
+            ? artist
+            : artist?.name || '',
+        )
+        .filter(Boolean)
+        .join(', ')
+    : ''
+
+  const artwork =
+    album.artwork ||
+    album.image ||
+    album.cover ||
+    album.coverImage ||
+    album.thumbnail ||
+    (Array.isArray(album.thumbnails)
+      ? album.thumbnails.find((item) => item?.url)?.url
+      : null) ||
+    null
+
+  const yearText = String(
+    album.year ||
+      album.releaseYear ||
+      album.subtitle ||
+      '',
+  )
+
+  const yearMatch = yearText.match(/\b(19|20)\d{2}\b/)
+
+  const songCount =
+    Number(
+      album.songCount ??
+        album.song_count ??
+        album.trackCount ??
+        album.track_count,
+    ) ||
+    (Array.isArray(album.tracks)
+      ? album.tracks.length
+      : 0)
 
   return {
     ...album,
@@ -141,17 +192,15 @@ function normalizeSearchAlbum(album) {
       album.artist ||
       album.artistName ||
       album.primaryArtist ||
+      albumArtists ||
       'Unknown artist',
-    artwork:
-      album.artwork ||
-      album.image ||
-      album.cover ||
-      album.coverImage ||
+    artwork,
+    year:
+      album.year ||
+      album.releaseYear ||
+      yearMatch?.[0] ||
       null,
-    year: album.year || null,
-    songCount:
-      Number(album.songCount ?? album.song_count ?? album.songCount) ||
-      0,
+    songCount,
   }
 }
 
@@ -337,6 +386,7 @@ function App() {
     useState(false)
 
   const [searchResults, setSearchResults] = useState([])
+  const [searchVeromeArtistResults, setSearchVeromeArtistResults] = useState([])
   const [searchFilter, setSearchFilter] = useState('All')
   const [searchAlbum, setSearchAlbum] = useState(null)
   const [searchAlbumResults, setSearchAlbumResults] = useState([])
@@ -344,6 +394,12 @@ function App() {
   const [selectedAlbumSongs, setSelectedAlbumSongs] = useState([])
   const [albumStatus, setAlbumStatus] = useState('idle')
   const [albumError, setAlbumError] = useState('')
+  const [selectedArtist, setSelectedArtist] = useState(null)
+  const [selectedArtistSongs, setSelectedArtistSongs] = useState([])
+  const [selectedArtistAlbums, setSelectedArtistAlbums] = useState([])
+  const [selectedArtistSingles, setSelectedArtistSingles] = useState([])
+  const [artistStatus, setArtistStatus] = useState('idle')
+  const [artistError, setArtistError] = useState('')
   const [searchStatus, setSearchStatus] =
     useState('idle')
   const [searchError, setSearchError] = useState('')
@@ -397,6 +453,7 @@ function App() {
   })
 
   const searchRequestIdRef = useRef(0)
+  const artistRequestIdRef = useRef(0)
   const lastSearchQueryRef = useRef('')
   const lastRecordedTrackRef = useRef('')
   const lastRecordedHistoryRef = useRef('')
@@ -415,6 +472,7 @@ function App() {
     seekTo,
     nextTrack: nextPlayerTrack,
     previousTrack: previousPlayerTrack,
+    veromePlayerContainerRef,
   } = useMusicPlayer()
 
   const currentSong =
@@ -450,7 +508,7 @@ function App() {
     }
 
     // Supabase history must wait until the authenticated user exists.
-    // Do NOT mark the track as history-recorded before this check.
+    // Do NOT mark it as history-recorded before this check.
     if (!user?.id || !playingTrack.id || !playingTrack.provider) {
       return
     }
@@ -723,6 +781,7 @@ function App() {
     setAlbumError('')
     setSearchText('')
     setSearchResults([])
+    setSearchVeromeArtistResults([])
     setSearchFilter('All')
     setSearchAlbum(null)
     setSearchAlbumResults([])
@@ -730,6 +789,12 @@ function App() {
     setSelectedAlbumSongs([])
     setAlbumStatus('idle')
     setAlbumError('')
+    setSelectedArtist(null)
+    setSelectedArtistSongs([])
+    setSelectedArtistAlbums([])
+    setSelectedArtistSingles([])
+    setArtistStatus('idle')
+    setArtistError('')
     setSearchStatus('idle')
     setSearchError('')
     setSubmittedQuery('')
@@ -779,9 +844,11 @@ function App() {
 
     if (!normalizedQuery) {
       searchRequestIdRef.current += 1
+      artistRequestIdRef.current += 1
       lastSearchQueryRef.current = ''
 
       setSearchResults([])
+      setSearchVeromeArtistResults([])
       setSearchFilter('All')
       setSearchAlbum(null)
       setSearchAlbumResults([])
@@ -789,6 +856,12 @@ function App() {
       setSelectedAlbumSongs([])
       setAlbumStatus('idle')
       setAlbumError('')
+      setSelectedArtist(null)
+      setSelectedArtistSongs([])
+      setSelectedArtistAlbums([])
+      setSelectedArtistSingles([])
+      setArtistStatus('idle')
+      setArtistError('')
       setSearchStatus('idle')
       setSearchError('')
       setSubmittedQuery('')
@@ -818,37 +891,53 @@ function App() {
     setSearchStatus('loading')
     setSearchError('')
     setSubmittedQuery(normalizedQuery)
+    setSearchVeromeArtistResults([])
+    setSearchFilter('All')
     setSearchAlbum(null)
     setSearchAlbumResults([])
+    setSelectedAlbum(null)
+    setSelectedAlbumSongs([])
+    setAlbumStatus('idle')
+    setAlbumError('')
+    setSelectedArtist(null)
+    setSelectedArtistSongs([])
+    setSelectedArtistAlbums([])
+    setSelectedArtistSingles([])
+    setArtistStatus('idle')
+    setArtistError('')
     setIsLoadingMore(false)
     setLoadMoreError('')
     setHasMoreResults(false)
 
     try {
-      const [songsResponse, albumPageResponses] =
-        await Promise.all([
-          searchMusic(
-            normalizedQuery,
-            DEFAULT_PROVIDER,
-            {
-              limit: SEARCH_PAGE_SIZE,
-            },
+      const [
+        songsResult,
+        albumPagesResult,
+        veromeResult,
+      ] = await Promise.allSettled([
+        searchMusic(
+          normalizedQuery,
+          DEFAULT_PROVIDER,
+          {
+            limit: SEARCH_PAGE_SIZE,
+          },
+        ),
+        Promise.all(
+          Array.from(
+            { length: SEARCH_ALBUM_PAGES },
+            (_, index) =>
+              searchAlbums(
+                normalizedQuery,
+                DEFAULT_PROVIDER,
+                {
+                  limit: SEARCH_ALBUM_LIMIT,
+                  page: index + 1,
+                },
+              ).catch(() => null),
           ),
-          Promise.all(
-            Array.from(
-              { length: SEARCH_ALBUM_PAGES },
-              (_, index) =>
-                searchAlbums(
-                  normalizedQuery,
-                  DEFAULT_PROVIDER,
-                  {
-                    limit: SEARCH_ALBUM_LIMIT,
-                    page: index + 1,
-                  },
-                ).catch(() => null),
-            ),
-          ),
-        ])
+        ),
+        searchVerome(normalizedQuery),
+      ])
 
       if (
         requestId !==
@@ -857,9 +946,126 @@ function App() {
         return
       }
 
-      const results = dedupeTracks(
-        songsResponse.results.map(toUiSong),
+      const songsResponse =
+        songsResult.status === 'fulfilled'
+          ? songsResult.value
+          : null
+
+      const albumPageResponses =
+        albumPagesResult.status === 'fulfilled'
+          ? albumPagesResult.value
+          : []
+
+      const veromeResponse =
+        veromeResult.status === 'fulfilled'
+          ? veromeResult.value
+          : null
+
+      const jioTracks = Array.isArray(
+        songsResponse?.results,
       )
+        ? songsResponse.results
+        : []
+
+      const veromeSearchResults =
+        Array.isArray(veromeResponse?.results)
+          ? veromeResponse.results
+          : []
+
+      const veromeSongResults =
+        veromeSearchResults.filter(
+          (result) =>
+            result?.type === 'song',
+        )
+
+      const veromeArtistResults =
+        veromeSearchResults.filter(
+          (result) =>
+            result?.type === 'artist',
+        )
+
+      /*
+       * Verome search can return an artist as the top result instead
+       * of returning the artist's songs directly. When that happens,
+       * load that artist's browse data so the normal Browse Songs and
+       * Albums tabs also contain the artist's real Verome content.
+       *
+       * Limit automatic artist expansion to the first three artist
+       * results so one broad search cannot create an excessive number
+       * of follow-up API requests.
+       */
+      const veromeArtistDetails =
+        await Promise.all(
+          veromeArtistResults
+            .slice(0, 3)
+            .map(async (artist) => {
+              try {
+                return await getVeromeArtist(
+                  String(artist.id),
+                )
+              } catch (error) {
+                console.warn(
+                  'Verome artist expansion failed:',
+                  artist?.name,
+                  error,
+                )
+                return null
+              }
+            }),
+        )
+
+      if (
+        requestId !==
+        searchRequestIdRef.current
+      ) {
+        return
+      }
+
+      const veromeArtistSongResults =
+        veromeArtistDetails.flatMap(
+          (detail) =>
+            Array.isArray(detail?.songs)
+              ? detail.songs
+              : [],
+        )
+
+      const veromeArtistAlbumResults =
+        veromeArtistDetails.flatMap(
+          (detail) => {
+            const artistName =
+              detail?.artist?.name ||
+              'Unknown artist'
+
+            const rawAlbums =
+              Array.isArray(detail?.albums)
+                ? detail.albums
+                : Array.isArray(detail?.artist?.albums)
+                  ? detail.artist.albums
+                  : []
+
+            return rawAlbums
+              .map((album) =>
+                normalizeSearchAlbum({
+                  ...album,
+                  provider:
+                    album?.provider ||
+                    'verome',
+                  artist:
+                    album?.artist ||
+                    artistName,
+                }),
+              )
+              .filter(Boolean)
+          },
+        )
+
+      const results = dedupeTracks([
+        ...jioTracks.map(toUiSong),
+        ...veromeSongResults.map(toUiSong),
+        ...veromeArtistSongResults.map(
+          toUiSong,
+        ),
+      ])
 
       const albumResults = dedupeAlbums(
         albumPageResponses
@@ -872,54 +1078,111 @@ function App() {
           .filter(Boolean),
       )
 
+      const veromeSearchAlbums =
+        veromeSearchResults
+          .filter(
+            (result) =>
+              result?.type === 'album' ||
+              result?.resultType === 'album',
+          )
+          .map((result) =>
+            normalizeSearchAlbum({
+              ...result,
+              provider:
+                result.provider ||
+                'verome',
+            }),
+          )
+          .filter(Boolean)
+
       /*
        * JioSaavn's album-search endpoint can sometimes return fewer
        * albums than the song search exposes. Build additional album
        * cards from the unique album metadata already present in the
-       * song results. These cards are still opened inside Auraan;
-       * openAlbum() uses the real album ID/link when available and
-       * falls back to an exact album-song search when it is not.
+       * JioSaavn song results.
        */
       const songDerivedAlbums = dedupeAlbums(
         results
-          .filter((song) => song?.album)
+          .filter(
+            (song) =>
+              song?.provider ===
+                DEFAULT_PROVIDER &&
+              song?.album,
+          )
           .map((song) => ({
             id: song.albumId
               ? String(song.albumId)
               : `derived-album-${encodeURIComponent(song.album)}`,
             provider: DEFAULT_PROVIDER,
             title: song.album,
-            artist: song.artist || 'Unknown artist',
-            artwork: song.artwork || null,
+            artist:
+              song.artist ||
+              'Unknown artist',
+            artwork:
+              song.artwork || null,
             year: song.year || null,
             songCount: results.filter(
               (candidate) =>
-                normalizeSearchText(candidate.album) ===
-                normalizeSearchText(song.album),
+                candidate?.provider ===
+                  DEFAULT_PROVIDER &&
+                normalizeSearchText(
+                  candidate.album,
+                ) ===
+                  normalizeSearchText(
+                    song.album,
+                  ),
             ).length,
             url: song.albumUrl || null,
-            isDerived: !song.albumId && !song.albumUrl,
+            isDerived:
+              !song.albumId &&
+              !song.albumUrl,
           })),
       )
 
       const finalAlbums = dedupeAlbums([
         ...albumResults,
+        ...veromeSearchAlbums,
+        ...veromeArtistAlbumResults,
         ...songDerivedAlbums,
       ])
 
-      setSearchAlbumResults(finalAlbums)
-      setSearchAlbum(finalAlbums[0] || null)
+      setSearchVeromeArtistResults(
+        veromeArtistResults,
+      )
+      setSearchAlbumResults(
+        finalAlbums,
+      )
+      setSearchAlbum(
+        finalAlbums[0] || null,
+      )
       setSearchResults(results)
       setSearchFilter('All')
 
-      setSearchStatus(
-        results.length || finalAlbums.length
-          ? 'success'
-          : 'empty',
-      )
+      const hasAnyResults =
+        results.length > 0 ||
+        finalAlbums.length > 0 ||
+        veromeArtistResults.length > 0
+
+      const bothProvidersFailed =
+        songsResult.status === 'rejected' &&
+        veromeResult.status === 'rejected'
+
+      if (bothProvidersFailed) {
+        setSearchStatus('error')
+        setSearchError(
+          'Unable to load music right now.',
+        )
+      } else {
+        setSearchStatus(
+          hasAnyResults
+            ? 'success'
+            : 'empty',
+        )
+      }
 
       setHasMoreResults(
-        songsResponse.results.length >=
+        songsResult.status === 'fulfilled' &&
+        jioTracks.length >=
           SEARCH_PAGE_SIZE,
       )
     } catch {
@@ -936,6 +1199,8 @@ function App() {
       )
     }
   }
+
+
 
   /*
    * Load more search results.
@@ -958,8 +1223,15 @@ function App() {
     setLoadMoreError('')
 
     try {
+      const currentJioTrackCount =
+        searchResults.filter(
+          (track) =>
+            track?.provider ===
+            DEFAULT_PROVIDER,
+        ).length
+
       const nextLimit =
-        searchResults.length +
+        currentJioTrackCount +
         SEARCH_PAGE_SIZE
 
       const response = await searchMusic(
@@ -1032,13 +1304,27 @@ function App() {
     setSearchText('')
 
     searchRequestIdRef.current += 1
+    artistRequestIdRef.current += 1
     lastSearchQueryRef.current = ''
 
     setSearchResults([])
+    setSearchVeromeArtistResults([])
     setSearchFilter('All')
     setSearchStatus('idle')
     setSearchError('')
     setSubmittedQuery('')
+    setSearchAlbum(null)
+    setSearchAlbumResults([])
+    setSelectedAlbum(null)
+    setSelectedAlbumSongs([])
+    setAlbumStatus('idle')
+    setAlbumError('')
+    setSelectedArtist(null)
+    setSelectedArtistSongs([])
+    setSelectedArtistAlbums([])
+    setSelectedArtistSingles([])
+    setArtistStatus('idle')
+    setArtistError('')
     setLoadMoreError('')
     setHasMoreResults(false)
   }
@@ -1252,79 +1538,179 @@ function App() {
     try {
       let songs = []
 
-      const albumReference =
-        album.url ||
-        (album.id &&
-        !String(album.id).startsWith('derived-album-') &&
-        !String(album.id).startsWith('album-')
-          ? String(album.id)
-          : null)
+      if (album.provider === 'verome') {
+        const veromeBaseUrl = (
+          import.meta.env?.VITE_VEROME_API_URL ||
+          'https://verome-api.auraan.deno.net'
+        ).replace(/\/$/, '')
 
-      if (albumReference) {
-        try {
-          const response = await getAlbum(
-            albumReference,
-            DEFAULT_PROVIDER,
-          )
+        const response = await fetch(
+          `${veromeBaseUrl}/api/albums/${encodeURIComponent(
+            String(album.id),
+          )}`,
+          {
+            headers: {
+              Accept: 'application/json',
+            },
+          },
+        )
 
-          const albumData = response?.album || response?.data || response
-
-          const rawSongs =
-            (Array.isArray(albumData?.songs) &&
-              albumData.songs) ||
-            (Array.isArray(albumData?.tracks) &&
-              albumData.tracks) ||
-            (Array.isArray(albumData?.results) &&
-              albumData.results) ||
-            []
-
-          songs = dedupeTracks(
-            rawSongs
-              .map(toUiSong)
-              .filter(Boolean),
-          )
-        } catch (albumError) {
-          console.warn(
-            'Direct JioSaavn album lookup failed; falling back to exact album search.',
-            albumError,
+        if (!response.ok) {
+          throw new Error(
+            `Verome album request failed with status ${response.status}`,
           )
         }
-      }
 
-      /*
-       * Fallback for album cards that were derived from the song
-       * search and therefore do not have a real JioSaavn album ID.
-       */
-      if (!songs.length) {
-        const response = await searchMusic(
-          album.title,
-          DEFAULT_PROVIDER,
-          { limit: 100 },
-        )
+        const payload = await response.json()
 
-        const albumTitle = normalizeSearchText(album.title)
+        const albumData =
+          payload?.album ||
+          payload?.data?.album ||
+          payload?.data ||
+          payload
+
+        const rawSongs =
+          (Array.isArray(albumData?.tracks) &&
+            albumData.tracks) ||
+          (Array.isArray(albumData?.songs) &&
+            albumData.songs) ||
+          (Array.isArray(albumData?.results) &&
+            albumData.results) ||
+          []
+
+        const artistName =
+          album.artist ||
+          selectedAlbum?.artist ||
+          'Unknown artist'
 
         songs = dedupeTracks(
-          (Array.isArray(response?.results)
-            ? response.results
-            : []
-          )
-            .map(toUiSong)
-            .filter(
-              (song) =>
-                normalizeSearchText(song.album) ===
-                albumTitle,
-            ),
+          rawSongs
+            .map((song) => {
+              if (!song?.videoId) {
+                return null
+              }
+
+              return toUiSong({
+                id: String(song.videoId),
+                playbackId:
+                  String(song.videoId),
+                provider: 'verome',
+                title:
+                  song.title ||
+                  'Unknown title',
+                artist:
+                  song.artist ||
+                  artistName,
+                album:
+                  album.title ||
+                  null,
+                artwork:
+                  song.thumbnail ||
+                  song.thumbnails?.[0]?.url ||
+                  null,
+                duration:
+                  Number(song.duration) ||
+                  0,
+                playable: true,
+              })
+            })
+            .filter(Boolean),
         )
+      } else {
+        const albumReference =
+          album.url ||
+          (album.id &&
+          !String(album.id).startsWith('derived-album-') &&
+          !String(album.id).startsWith('album-')
+            ? String(album.id)
+            : null)
+
+        if (albumReference) {
+          try {
+            const response = await getAlbum(
+              albumReference,
+              DEFAULT_PROVIDER,
+            )
+
+            const albumData =
+              response?.album ||
+              response?.data ||
+              response
+
+            const rawSongs =
+              (Array.isArray(
+                albumData?.songs,
+              ) &&
+                albumData.songs) ||
+              (Array.isArray(
+                albumData?.tracks,
+              ) &&
+                albumData.tracks) ||
+              (Array.isArray(
+                albumData?.results,
+              ) &&
+                albumData.results) ||
+              []
+
+            songs = dedupeTracks(
+              rawSongs
+                .map(toUiSong)
+                .filter(Boolean),
+            )
+          } catch (albumError) {
+            console.warn(
+              'Direct JioSaavn album lookup failed; falling back to exact album search.',
+              albumError,
+            )
+          }
+        }
+
+        /*
+         * Fallback for album cards that were derived from the song
+         * search and therefore do not have a real JioSaavn album ID.
+         */
+        if (!songs.length) {
+          const response = await searchMusic(
+            album.title,
+            DEFAULT_PROVIDER,
+            { limit: 100 },
+          )
+
+          const albumTitle =
+            normalizeSearchText(
+              album.title,
+            )
+
+          songs = dedupeTracks(
+            (Array.isArray(
+              response?.results,
+            )
+              ? response.results
+              : []
+            )
+              .map(toUiSong)
+              .filter(
+                (song) =>
+                  normalizeSearchText(
+                    song.album,
+                  ) === albumTitle,
+              ),
+          )
+        }
       }
 
       setSelectedAlbumSongs(songs)
       setAlbumStatus(songs.length ? 'success' : 'empty')
     } catch (error) {
-      console.error('Failed to load album:', error)
+      console.error(
+        'Failed to load album:',
+        error,
+      )
       setSelectedAlbumSongs([])
       setAlbumStatus('error')
-      setAlbumError('Unable to load this album right now.')
+      setAlbumError(
+        'Unable to load this album right now.',
+      )
     }
   }
 
@@ -1334,6 +1720,410 @@ function App() {
     setAlbumStatus('idle')
     setAlbumError('')
     setActiveTab('Browse')
+  }
+
+  /*
+   * Open a Verome artist from Browse search.
+   */
+  const openArtist = async (artist) => {
+    if (
+      artist?.provider !== 'verome' ||
+      !artist?.id
+    ) {
+      return
+    }
+
+    const requestId =
+      artistRequestIdRef.current + 1
+
+    artistRequestIdRef.current = requestId
+
+    setSelectedArtist(artist)
+    setSelectedArtistSongs([])
+    setSelectedArtistAlbums([])
+    setSelectedArtistSingles([])
+    setArtistStatus('loading')
+    setArtistError('')
+    setActiveTab('Artist')
+    setShowSearchSheet(false)
+    setQueueOpen(false)
+
+    try {
+      const response =
+        await getVeromeArtist(
+          String(artist.id),
+        )
+
+      if (
+        requestId !==
+        artistRequestIdRef.current
+      ) {
+        return
+      }
+
+      setSelectedArtist(
+        response.artist || artist,
+      )
+
+      setSelectedArtistSongs(
+        Array.isArray(response.songs)
+          ? response.songs.map(toUiSong)
+          : [],
+      )
+
+      setSelectedArtistAlbums(
+        Array.isArray(response.albums)
+          ? response.albums
+              .map((album) =>
+                normalizeSearchAlbum({
+                  ...album,
+                  provider:
+                    album?.provider ||
+                    'verome',
+                  artist:
+                    album?.artist ||
+                    response?.artist?.name ||
+                    'Unknown artist',
+                }),
+              )
+              .filter(Boolean)
+          : [],
+      )
+
+      setSelectedArtistSingles(
+        Array.isArray(response.singles)
+          ? response.singles
+          : [],
+      )
+
+      const hasSongs =
+        Array.isArray(response.songs) &&
+        response.songs.length > 0
+
+      const hasAlbums =
+        Array.isArray(response.albums) &&
+        response.albums.length > 0
+
+      const hasSingles =
+        Array.isArray(response.singles) &&
+        response.singles.length > 0
+
+      setArtistStatus(
+        hasSongs ||
+        hasAlbums ||
+        hasSingles
+          ? 'success'
+          : 'empty',
+      )
+    } catch (error) {
+      if (
+        requestId !==
+        artistRequestIdRef.current
+      ) {
+        return
+      }
+
+      console.error(
+        'Failed to load Verome artist:',
+        error,
+      )
+
+      setSelectedArtistSongs([])
+      setSelectedArtistAlbums([])
+      setSelectedArtistSingles([])
+      setArtistStatus('error')
+      setArtistError(
+        'Unable to load this artist right now.',
+      )
+    }
+  }
+
+  const closeArtist = () => {
+    artistRequestIdRef.current += 1
+    setSelectedArtist(null)
+    setSelectedArtistSongs([])
+    setSelectedArtistAlbums([])
+    setSelectedArtistSingles([])
+    setArtistStatus('idle')
+    setArtistError('')
+    setActiveTab('Browse')
+  }
+
+  /*
+   * =========================================================
+   * ARTIST
+   * =========================================================
+   */
+  const renderSelectedArtist = () => {
+    if (!selectedArtist) {
+      return (
+        <div className="pb-28 lg:pb-10">
+          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-12 text-center">
+            <p className="text-sm font-medium text-white/70">
+              No artist selected.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('Browse')}
+              className="mt-5 min-h-11 rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition hover:bg-white/90 active:scale-95"
+            >
+              Back to search
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-8 pb-28 lg:pb-10">
+        <section className="relative overflow-hidden rounded-[24px] border border-white/[0.07] bg-[#101114]">
+          <div className="absolute inset-0 bg-gradient-to-br from-white/[0.05] via-transparent to-transparent" />
+
+          <div className="relative p-5 sm:p-7">
+            <button
+              type="button"
+              onClick={closeArtist}
+              className="mb-6 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-white/40 transition hover:text-white/75"
+            >
+              <ArrowLeft size={14} />
+              Back to search
+            </button>
+
+            <div className="flex flex-col gap-6 sm:flex-row sm:items-center">
+              <div className="relative h-40 w-40 shrink-0 overflow-hidden rounded-full bg-[#18191d] ring-1 ring-white/[0.08]">
+                <Artwork
+                  src={selectedArtist.artwork}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  iconSize={46}
+                />
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/35">
+                  Verome artist
+                </p>
+
+                <h1 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-5xl">
+                  {selectedArtist.name}
+                </h1>
+
+                {selectedArtist.subscribers ? (
+                  <p className="mt-3 text-sm text-white/45">
+                    {selectedArtist.subscribers} subscribers
+                  </p>
+                ) : selectedArtist.subtitle ? (
+                  <p className="mt-3 text-sm text-white/45">
+                    {selectedArtist.subtitle}
+                  </p>
+                ) : null}
+
+                {selectedArtist.description ? (
+                  <p className="mt-4 max-w-2xl whitespace-pre-line text-sm leading-6 text-white/45">
+                    {selectedArtist.description}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {artistStatus === 'loading' ? (
+          <section className="rounded-[20px] border border-white/[0.07] bg-white/[0.02] px-5 py-7">
+            <p
+              className="text-sm text-white/45"
+              role="status"
+              aria-live="polite"
+            >
+              Loading artist songs and albums...
+            </p>
+          </section>
+        ) : null}
+
+        {artistStatus === 'error' ? (
+          <section className="rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-7">
+            <p
+              className="text-sm text-white/60"
+              role="alert"
+            >
+              {artistError}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                void openArtist(selectedArtist)
+              }}
+              className="mt-4 min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white/70 transition hover:bg-white/[0.08]"
+            >
+              Try again
+            </button>
+          </section>
+        ) : null}
+
+        {artistStatus === 'empty' ? (
+          <section className="rounded-[20px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-7">
+            <p className="text-sm text-white/60">
+              No artist content was found.
+            </p>
+          </section>
+        ) : null}
+
+        {selectedArtistSongs.length ? (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <SectionHeader title="Top songs" />
+
+              <span className="text-xs text-white/30">
+                {selectedArtistSongs.length}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {selectedArtistSongs.map(
+                (song, index) => (
+                  <SongRow
+                    key={`${song.provider}-${song.id}`}
+                    song={song}
+                    number={index + 1}
+                    onOpenPlayer={(track) =>
+                      handleOpenPlayer(
+                        track,
+                        selectedArtistSongs,
+                      )
+                    }
+                    onMoreOptions={
+                      handleSongMoreOptions
+                    }
+                    isActive={sameTrack(
+                      song,
+                      currentSong,
+                    )}
+                    isLoading={
+                      playerLoading &&
+                      sameTrack(
+                        song,
+                        currentSong,
+                      )
+                    }
+                    isPlaying={isPlaying}
+                    error={
+                      playerError &&
+                      sameTrack(
+                        song,
+                        currentSong,
+                      )
+                        ? playerError
+                        : ''
+                    }
+                    {...favoriteProps(song)}
+                  />
+                ),
+              )}
+            </div>
+
+            <p className="text-xs leading-5 text-white/30">
+              Verome playback uses the visible video
+              player in the Now Playing panel.
+            </p>
+          </section>
+        ) : null}
+
+        {selectedArtistAlbums.length ? (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <SectionHeader title="Albums" />
+
+              <span className="text-xs text-white/30">
+                {selectedArtistAlbums.length}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              {selectedArtistAlbums.map(
+                (album) => (
+                  <button
+                    key={`${album.provider || 'verome'}-${album.id || album.title}`}
+                    type="button"
+                    onClick={() => {
+                      void openAlbum({
+                        ...album,
+                        provider:
+                          album.provider ||
+                          'verome',
+                        id:
+                          album.id ||
+                          album.browseId,
+                        artist:
+                          album.artist ||
+                          selectedArtist.name,
+                      })
+                    }}
+                    className="min-w-0 rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-3 text-left transition hover:border-white/[0.14] hover:bg-white/[0.055]"
+                    aria-label={`Open album ${album.title}`}
+                  >
+                    <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-[#18191d] ring-1 ring-white/[0.08]">
+                      <Artwork
+                        src={album.artwork}
+                        className="absolute inset-0 h-full w-full object-cover"
+                        iconSize={28}
+                      />
+                    </div>
+
+                    <p className="mt-3 truncate text-sm font-semibold text-white">
+                      {album.title}
+                    </p>
+
+                    <p className="mt-1 text-xs text-white/40">
+                      {album.year || 'Album'}
+                    </p>
+                  </button>
+                ),
+              )}
+            </div>
+          </section>
+        ) : null}
+
+        {selectedArtistSingles.length ? (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <SectionHeader title="Singles" />
+
+              <span className="text-xs text-white/30">
+                {selectedArtistSingles.length}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              {selectedArtistSingles.map(
+                (single) => (
+                  <div
+                    key={`${single.provider || 'verome'}-${single.id || single.title}`}
+                    className="min-w-0 rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-3 text-left"
+                  >
+                    <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-[#18191d] ring-1 ring-white/[0.08]">
+                      <Artwork
+                        src={single.artwork}
+                        className="absolute inset-0 h-full w-full object-cover"
+                        iconSize={28}
+                      />
+                    </div>
+
+                    <p className="mt-3 truncate text-sm font-semibold text-white">
+                      {single.title}
+                    </p>
+
+                    <p className="mt-1 text-xs text-white/40">
+                      {single.year || 'Single'}
+                    </p>
+                  </div>
+                ),
+              )}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    )
   }
 
   /*
@@ -2093,33 +2883,64 @@ function App() {
       'Playlists',
     ]
 
-    const searchArtistResults = []
+    const jioArtistResults = []
     const artistMap = new Map()
 
-    searchResults.forEach((song) => {
-      const artistNames = String(song?.artist || '')
-        .split(',')
-        .map((name) => name.trim())
-        .filter(Boolean)
+    searchResults
+      .filter(
+        (song) =>
+          song?.provider === DEFAULT_PROVIDER,
+      )
+      .forEach((song) => {
+        const artistNames = String(
+          song?.artist || '',
+        )
+          .split(',')
+          .map((name) => name.trim())
+          .filter(Boolean)
 
-      artistNames.forEach((artistName) => {
-        const key = normalizeSearchText(artistName)
-        if (!key || artistMap.has(key)) return
+        artistNames.forEach((artistName) => {
+          const key =
+            normalizeSearchText(artistName)
 
-        artistMap.set(key, true)
-        searchArtistResults.push({
-          id: `artist-${encodeURIComponent(key)}`,
-          name: artistName,
-          artwork: song.artwork || null,
-          songCount: searchResults.filter((candidate) =>
-            String(candidate?.artist || '')
-              .split(',')
-              .map((name) => normalizeSearchText(name))
-              .includes(key),
-          ).length,
+          if (
+            !key ||
+            artistMap.has(key)
+          ) {
+            return
+          }
+
+          artistMap.set(key, true)
+
+          jioArtistResults.push({
+            id: `artist-${encodeURIComponent(key)}`,
+            provider: DEFAULT_PROVIDER,
+            name: artistName,
+            artwork:
+              song.artwork || null,
+            songCount: searchResults.filter(
+              (candidate) =>
+                candidate?.provider ===
+                  DEFAULT_PROVIDER &&
+                String(
+                  candidate?.artist || '',
+                )
+                  .split(',')
+                  .map((name) =>
+                    normalizeSearchText(
+                      name,
+                    ),
+                  )
+                  .includes(key),
+            ).length,
+          })
         })
       })
-    })
+
+    const searchArtistResults = [
+      ...jioArtistResults,
+      ...searchVeromeArtistResults,
+    ]
 
     const searchPlaylistResults = playlists.filter((playlist) => {
       const title = normalizeSearchText(
@@ -2273,11 +3094,26 @@ function App() {
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                       {searchArtistResults.map((artist) => (
                         <button
-                          key={artist.id}
+                          key={`${artist.provider || DEFAULT_PROVIDER}-${artist.id}`}
                           type="button"
-                          onClick={() => setSearchFilter('Songs')}
+                          onClick={() => {
+                            if (
+                              artist.provider ===
+                              'verome'
+                            ) {
+                              void openArtist(artist)
+                              return
+                            }
+
+                            setSearchFilter('Songs')
+                          }}
                           className="group min-w-0 rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-4 text-center transition hover:border-white/[0.14] hover:bg-white/[0.055]"
-                          aria-label={`Show songs by ${artist.name}`}
+                          aria-label={
+                            artist.provider ===
+                            'verome'
+                              ? `Open artist ${artist.name}`
+                              : `Show songs by ${artist.name}`
+                          }
                         >
                           <div className="mx-auto aspect-square w-full max-w-[150px] overflow-hidden rounded-full bg-[#18191d] ring-1 ring-white/[0.08]">
                             <Artwork
@@ -2291,8 +3127,16 @@ function App() {
                             {artist.name}
                           </p>
                           <p className="mt-1 text-xs text-white/40">
-                            {artist.songCount}{' '}
-                            {artist.songCount === 1 ? 'song' : 'songs'}
+                            {artist.provider ===
+                            'verome'
+                              ? artist.subtitle ||
+                                'Verome artist'
+                              : `${artist.songCount} ${
+                                  artist.songCount ===
+                                  1
+                                    ? 'song'
+                                    : 'songs'
+                                }`}
                           </p>
                         </button>
                       ))}
@@ -2479,7 +3323,7 @@ function App() {
             ) : null}
           </section>
         ) : (
-          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-10 text-center">
+          <div className="rounded-[24px] border border-dashed border-white/[0.10] bg-white/[0.02] px-5 py-10 text-center">
             <Search
               size={22}
               className="mx-auto text-white/25"
@@ -2490,8 +3334,8 @@ function App() {
             </p>
 
             <p className="mt-2 text-xs text-white/40">
-              Results will come from the connected
-              music service.
+              Results can come from JioSaavn and
+              Verome.
             </p>
           </div>
         )}
@@ -3644,6 +4488,10 @@ function App() {
       return renderSelectedAlbum()
     }
 
+    if (activeTab === 'Artist') {
+      return renderSelectedArtist()
+    }
+
     if (activeTab === 'Player') {
       return renderPlayerScreen()
     }
@@ -3668,7 +4516,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#08090b] text-white selection:bg-white/15 selection:text-white">
-      <div className="mx-auto flex min-h-screen max-w-[1500px]">
+      <div className="mx-auto flex min-h-screen max-w-[1500px] flex-col lg:flex-row">
         <DesktopSidebar
           activeTab={activeTab}
           onSelectTab={(tab) => {
@@ -3689,7 +4537,7 @@ function App() {
             onSignOut={handleSignOut}
         />
 
-        <main className="relative min-w-0 flex-1 overflow-hidden bg-[#090a0c]">
+        <main className="order-last relative min-w-0 flex-1 overflow-hidden bg-[#090a0c] lg:order-none">
           <TopBar
             title={activeTab}
             searchValue={searchText}
@@ -3701,6 +4549,167 @@ function App() {
             {renderScreen()}
           </div>
         </main>
+
+        <aside
+          className="order-first w-full shrink-0 border-b border-white/[0.07] bg-[#0b0c0f] lg:order-none lg:w-[360px] lg:border-b-0 lg:border-l lg:border-white/[0.07]"
+          aria-label="Now playing"
+        >
+          <div className="p-4 sm:p-5 lg:sticky lg:top-0 lg:h-screen lg:overflow-y-auto lg:p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/35">
+                  AURAAN
+                </p>
+
+                <h2 className="mt-1 text-lg font-semibold tracking-[-0.03em] text-white">
+                  Now playing
+                </h2>
+              </div>
+
+              {currentSong ? (
+                <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.16em] text-white/40">
+                  {currentSong.provider === 'verome'
+                    ? 'Verome'
+                    : 'JioSaavn'}
+                </span>
+              ) : null}
+            </div>
+
+            <div className="mt-4 overflow-hidden rounded-[22px] border border-white/[0.08] bg-[#101114] shadow-[0_20px_60px_rgba(0,0,0,0.3)]">
+              <div className="relative aspect-video w-full bg-black">
+                {currentSong?.provider === 'verome' ? (
+                  <>
+                    <div
+                      ref={veromePlayerContainerRef}
+                      className="absolute inset-0 h-full w-full"
+                    />
+
+                    {playerLoading ? (
+                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/35">
+                        <span className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+                      </div>
+                    ) : null}
+                  </>
+                ) : currentSong ? (
+                  <div className="absolute inset-0 bg-[#18191d]">
+                    <Artwork
+                      src={currentSong.artwork}
+                      className="absolute inset-0 h-full w-full object-cover"
+                      iconSize={56}
+                    />
+
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-transparent to-black/10" />
+                  </div>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-white/[0.06] to-transparent px-6 text-center">
+                    <p className="text-sm text-white/35">
+                      Choose a song to start listening.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {currentSong ? (
+              <div className="mt-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-xl font-semibold tracking-[-0.03em] text-white">
+                      {currentSong.title}
+                    </p>
+
+                    <p className="mt-1 truncate text-sm text-white/50">
+                      {currentSong.artist}
+                    </p>
+
+                    {currentSong.album ? (
+                      <p className="mt-1 truncate text-xs text-white/30">
+                        {currentSong.album}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('Player')}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.025] text-white/40 transition hover:bg-white/[0.07] hover:text-white active:scale-95"
+                    aria-label="Open full player"
+                  >
+                    <MoreHorizontal size={17} />
+                  </button>
+                </div>
+
+                <div className="mt-5 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleFavorite(currentSong)}
+                    className={`flex h-10 w-10 items-center justify-center rounded-full border border-white/10 transition active:scale-95 ${
+                      favorites.some((item) =>
+                        sameTrack(item, currentSong),
+                      )
+                        ? 'bg-white/10 text-white'
+                        : 'bg-white/[0.025] text-white/40 hover:text-white'
+                    }`}
+                    aria-label="Toggle favorite"
+                  >
+                    <Heart
+                      size={17}
+                      fill={
+                        favorites.some((item) =>
+                          sameTrack(item, currentSong),
+                        )
+                          ? 'currentColor'
+                          : 'none'
+                      }
+                    />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleOpenPlayer(
+                        currentSong,
+                        playerQueue?.length
+                          ? playerQueue
+                          : [currentSong],
+                      )
+                    }
+                    disabled={playerLoading}
+                    className="flex h-10 flex-1 items-center justify-center gap-2 rounded-full bg-white px-4 text-sm font-medium text-black transition hover:bg-white/90 active:scale-[0.98] disabled:cursor-wait disabled:opacity-60"
+                  >
+                    {playerLoading ? (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/20 border-t-black" />
+                    ) : isPlaying ? (
+                      <Pause size={16} fill="currentColor" />
+                    ) : (
+                      <Play size={16} fill="currentColor" />
+                    )}
+
+                    {isPlaying ? 'Pause' : 'Play'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setQueueOpen(true)}
+                    className="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.025] text-white/40 transition hover:bg-white/[0.07] hover:text-white active:scale-95"
+                    aria-label="Open queue"
+                  >
+                    <ListMusic size={17} />
+                  </button>
+                </div>
+
+                {playerError ? (
+                  <p
+                    className="mt-3 text-xs leading-5 text-white/35"
+                    role="alert"
+                  >
+                    {playerError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </aside>
       </div>
 
       {showSearchSheet
