@@ -43,15 +43,20 @@ function QueueSheet({ isOpen, onClose, queue, currentSong, onSelectTrack }) {
               key={`${song.provider || 'local'}-${song.id}`}
               type="button"
               onClick={() => onSelectTrack?.(song)}
-              className={`flex min-h-14 w-full items-center gap-3 rounded-2xl px-3 py-2 text-left transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-400/70 ${song.provider === currentSong.provider && song.id === currentSong.id ? 'bg-white/[0.06]' : 'bg-white/[0.02]'}`}
+              className={`flex min-h-14 w-full items-center gap-3 rounded-2xl border border-transparent px-3 py-2 text-left transition active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-400/70 ${
+                song.provider === currentSong.provider &&
+                song.id === currentSong.id
+                  ? 'border-white/[0.08] bg-[#1b2028]'
+                  : 'bg-[#0d1116] hover:border-white/[0.05] hover:bg-[#151a21]'
+              }`}
             >
               <div className="flex w-7 items-center justify-center text-xs text-white/45">{index + 1}</div>
               <div className={`relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br ${song.cover || 'from-white/10 to-white/5'}`}>
                 <Artwork src={song.artwork} className="absolute inset-0 h-full w-full object-cover" iconSize={14} />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-white">{song.title}</p>
-                <p className="truncate text-xs text-white/50">{song.artist}</p>
+                <p className="truncate text-sm font-medium text-white/85">{song.title}</p>
+                <p className="truncate text-xs text-white/45">{song.artist}</p>
               </div>
               <span className="text-xs text-white/45">{song.duration}</span>
             </button>

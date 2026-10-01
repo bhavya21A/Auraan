@@ -1,6 +1,8 @@
+import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 import AuthScreen from './components/auth/AuthScreen'
 import { supabase } from './services/supabase'
+import './App.css'
 
 
 import {
@@ -13,6 +15,7 @@ import {
   Pause,
   Play,
   Plus,
+  PictureInPicture,
   Repeat,
   Search,
   Shuffle,
@@ -51,6 +54,74 @@ const DEFAULT_PROVIDER = 'jiosaavn'
 const SEARCH_PAGE_SIZE = 20
 const SEARCH_ALBUM_LIMIT = 20
 const SEARCH_ALBUM_PAGES = 4
+const SEARCH_HISTORY_LIMIT = 12
+const SEARCH_HISTORY_STORAGE_PREFIX = 'auraan:search-history:'
+
+function normalizeSearchHistoryEntry(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function readSearchHistoryForUser(userId) {
+  if (!userId || typeof window === 'undefined') return []
+
+  try {
+    const raw = window.localStorage.getItem(
+      `${SEARCH_HISTORY_STORAGE_PREFIX}${userId}`,
+    )
+
+    if (!raw) return []
+
+    const parsed = JSON.parse(raw)
+
+    if (!Array.isArray(parsed)) return []
+
+    return parsed
+      .map(normalizeSearchHistoryEntry)
+      .filter(Boolean)
+      .slice(0, SEARCH_HISTORY_LIMIT)
+  } catch (error) {
+    console.warn('Unable to read search history:', error)
+    return []
+  }
+}
+
+function writeSearchHistoryForUser(userId, entries) {
+  if (!userId || typeof window === 'undefined') return
+
+  try {
+    window.localStorage.setItem(
+      `${SEARCH_HISTORY_STORAGE_PREFIX}${userId}`,
+      JSON.stringify(
+        entries
+          .map(normalizeSearchHistoryEntry)
+          .filter(Boolean)
+          .slice(0, SEARCH_HISTORY_LIMIT),
+      ),
+    )
+  } catch (error) {
+    console.warn('Unable to save search history:', error)
+  }
+}
+
+function addSearchHistoryEntry(userId, value) {
+  const entry = normalizeSearchHistoryEntry(value)
+
+  if (!userId || !entry) return readSearchHistoryForUser(userId)
+
+  const current = readSearchHistoryForUser(userId)
+  const next = [
+    entry,
+    ...current.filter(
+      (item) => normalizeSearchText(item) !== normalizeSearchText(entry),
+    ),
+  ].slice(0, SEARCH_HISTORY_LIMIT)
+
+  writeSearchHistoryForUser(userId, next)
+
+  return next
+}
 
 const sameTrack = (left, right) => {
   if (!left || !right) return false
@@ -480,7 +551,10 @@ const likedSongFromRow = (row) => ({
   year: row.year || null,
   language: row.language || null,
   explicitContent: Boolean(row.explicit_content),
-  playable: Boolean(row.stream_url),
+  playable:
+  Boolean(row.stream_url) ||
+  Boolean(row.song_url) ||
+  row.provider === 'verome',
 })
 
 const favoriteRowFromTrack = (track, userId) => ({
@@ -513,7 +587,10 @@ const historySongFromRow = (row) => ({
   year: row.year || null,
   language: row.language || null,
   explicitContent: Boolean(row.explicit_content),
-  playable: Boolean(row.stream_url),
+  playable:
+    Boolean(row.stream_url) ||
+    Boolean(row.song_url) ||
+    row.provider === 'verome',
   playedAt: row.played_at || null,
 })
 
@@ -622,6 +699,11 @@ function App() {
   const [submittedQuery, setSubmittedQuery] =
     useState('')
 
+  const [searchHistory, setSearchHistory] =
+    useState([])
+  const [isSearchHistoryOpen, setIsSearchHistoryOpen] =
+    useState(false)
+
   const [isLoadingMore, setIsLoadingMore] =
     useState(false)
   const [loadMoreError, setLoadMoreError] =
@@ -665,6 +747,9 @@ function App() {
   const [playlistCoverUploading, setPlaylistCoverUploading] =
     useState(false)
 
+  const [floatingPlayerRoot, setFloatingPlayerRoot] = useState(null)
+  const [floatingPlayerError, setFloatingPlayerError] = useState('')
+
   const [playlistDialog, setPlaylistDialog] = useState({
     open: false,
     mode: null,
@@ -678,6 +763,18 @@ function App() {
   const lastRecordedHistoryRef = useRef('')
   const searchInputRef = useRef(null)
   const playlistCoverInputRef = useRef(null)
+
+  const floatingPlayerWindowRef = useRef(null)
+  const floatingPlayerRootRef = useRef(null)
+
+  useEffect(() => {
+    const history = user?.id
+      ? readSearchHistoryForUser(user.id)
+      : []
+
+    setSearchHistory(history)
+    setIsSearchHistoryOpen(Boolean(history.length))
+  }, [user?.id])
 
   const {
     currentTrack: playingTrack,
@@ -697,6 +794,587 @@ function App() {
 
   const currentSong =
     playingTrack || recentlyPlayed[0] || null
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) {
+      return
+    }
+
+    const mediaSession = navigator.mediaSession
+
+    if (currentSong) {
+      try {
+        const artwork = currentSong.artwork
+          ? [
+              {
+                src: currentSong.artwork,
+                sizes: '512x512',
+                type: 'image/jpeg',
+              },
+            ]
+          : []
+
+        mediaSession.metadata = new MediaMetadata({
+          title: currentSong.title || 'AURAAN',
+          artist: currentSong.artist || 'Unknown artist',
+          album: currentSong.album || 'AURAAN',
+          artwork,
+        })
+      } catch (error) {
+        console.warn(
+          'AURAAN Media Session metadata unavailable:',
+          error,
+        )
+      }
+    } else {
+      mediaSession.metadata = null
+    }
+
+    try {
+      mediaSession.playbackState = isPlaying ? 'playing' : 'paused'
+    } catch {
+      // Some browsers expose Media Session only partially.
+    }
+
+    const registerAction = (action, handler) => {
+      try {
+        mediaSession.setActionHandler(action, handler)
+      } catch {
+        // Ignore actions unsupported by this browser.
+      }
+    }
+
+    registerAction('play', () => {
+      if (!isPlaying) {
+        void togglePlay()
+      }
+    })
+
+    registerAction('pause', () => {
+      if (isPlaying) {
+        void togglePlay()
+      }
+    })
+
+    registerAction('nexttrack', () => {
+      void nextPlayerTrack()
+    })
+
+    registerAction('previoustrack', () => {
+      void previousPlayerTrack()
+    })
+
+    registerAction('seekbackward', (details) => {
+      const offset = Number(details?.seekOffset) || 10
+      seekTo(Math.max(0, Number(currentTime) - offset))
+    })
+
+    registerAction('seekforward', (details) => {
+      const offset = Number(details?.seekOffset) || 10
+      const total = Number(playerDuration) || 0
+      seekTo(
+        total > 0
+          ? Math.min(total, Number(currentTime) + offset)
+          : Number(currentTime) + offset,
+      )
+    })
+
+    registerAction('seekto', (details) => {
+      const nextPosition = Number(details?.seekTime)
+      if (!Number.isFinite(nextPosition) || nextPosition < 0) return
+
+      const total = Number(playerDuration) || 0
+      seekTo(
+        total > 0
+          ? Math.min(total, nextPosition)
+          : nextPosition,
+      )
+    })
+
+    if (
+      typeof mediaSession.setPositionState === 'function' &&
+      Number(playerDuration) > 0 &&
+      Number(currentTime) >= 0 &&
+      Number(currentTime) <= Number(playerDuration)
+    ) {
+      try {
+        mediaSession.setPositionState({
+          duration: Number(playerDuration),
+          playbackRate: 1,
+          position: Number(currentTime),
+        })
+      } catch {
+        // Ignore invalid position updates.
+      }
+    }
+
+    return () => {
+      ;[
+        'play',
+        'pause',
+        'nexttrack',
+        'previoustrack',
+        'seekbackward',
+        'seekforward',
+        'seekto',
+      ].forEach((action) => {
+        try {
+          mediaSession.setActionHandler(action, null)
+        } catch {
+          // Ignore unsupported actions during cleanup.
+        }
+      })
+    }
+  }, [
+    currentSong,
+    isPlaying,
+    currentTime,
+    playerDuration,
+    togglePlay,
+    nextPlayerTrack,
+    previousPlayerTrack,
+    seekTo,
+  ])
+
+  const floatingPlayerStyles = `
+    :root {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      background: transparent;
+    }
+
+    body {
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #eef2f6;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .auraan-float {
+      min-height: 190px;
+      padding: 14px;
+      color: #eef2f6;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(137, 121, 255, 0.18), transparent 38%),
+        radial-gradient(circle at 100% 100%, rgba(255, 88, 150, 0.08), transparent 40%),
+        #090d12;
+    }
+
+    .auraan-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(214, 223, 232, 0.10);
+      border-radius: 22px;
+      padding: 14px;
+      background:
+        linear-gradient(145deg, #1d2631 0%, #151c25 48%, #10161e 100%);
+      box-shadow:
+        12px 14px 28px rgba(0, 0, 0, 0.48),
+        -8px -8px 20px rgba(255, 255, 255, 0.025),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.055),
+        inset -1px -1px 0 rgba(0, 0, 0, 0.45);
+    }
+
+    .auraan-card::after {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border: 1px solid rgba(255, 255, 255, 0.025);
+      border-radius: 21px;
+      pointer-events: none;
+    }
+
+    .auraan-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      position: relative;
+      z-index: 1;
+    }
+
+    .auraan-cover {
+      width: 64px;
+      height: 64px;
+      flex: 0 0 64px;
+      overflow: hidden;
+      border-radius: 17px;
+      background: #0b1016;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow:
+        inset 4px 4px 10px rgba(0, 0, 0, 0.35),
+        inset -3px -3px 8px rgba(255, 255, 255, 0.045),
+        6px 7px 13px rgba(0, 0, 0, 0.28);
+    }
+
+    .auraan-cover img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    .auraan-meta {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .auraan-title {
+      font-size: 15px;
+      font-weight: 750;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      letter-spacing: -0.015em;
+    }
+
+    .auraan-artist {
+      margin-top: 5px;
+      color: rgba(238, 242, 246, 0.48);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .auraan-icon,
+    .auraan-main {
+      border: 1px solid rgba(20, 26, 34, 0.72);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition:
+        transform 0.12s ease,
+        filter 0.12s ease,
+        box-shadow 0.12s ease;
+    }
+
+    .auraan-icon {
+      width: 36px;
+      height: 36px;
+      flex: 0 0 36px;
+      border-radius: 50%;
+      color: #28313c;
+      background:
+        linear-gradient(145deg, #edf2f6 0%, #c8d0d8 100%);
+      box-shadow:
+        5px 6px 11px rgba(0, 0, 0, 0.30),
+        -3px -3px 8px rgba(255, 255, 255, 0.10),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.68),
+        inset -1px -1px 0 rgba(0, 0, 0, 0.16);
+    }
+
+    .auraan-icon:hover {
+      filter: brightness(1.03);
+    }
+
+    .auraan-icon:active,
+    .auraan-main:active {
+      transform: translateY(2px) scale(0.96);
+      box-shadow:
+        2px 3px 6px rgba(0, 0, 0, 0.28),
+        inset 2px 2px 5px rgba(0, 0, 0, 0.14),
+        inset -1px -1px 0 rgba(255, 255, 255, 0.20);
+    }
+
+    .auraan-fav-active {
+      color: #ffffff;
+      background:
+        linear-gradient(145deg, #aa9cff 0%, #7766f2 100%);
+      border-color: rgba(173, 160, 255, 0.45);
+      box-shadow:
+        0 0 18px rgba(129, 111, 255, 0.24),
+        5px 6px 11px rgba(0, 0, 0, 0.30),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.26),
+        inset -1px -1px 0 rgba(0, 0, 0, 0.18);
+    }
+
+    .auraan-controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 13px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .auraan-main {
+      width: 46px;
+      height: 46px;
+      flex: 0 0 46px;
+      border-radius: 50%;
+      color: #ffffff;
+      background:
+        linear-gradient(145deg, #b2a8ff 0%, #795ef3 100%);
+      border-color: rgba(196, 187, 255, 0.52);
+      box-shadow:
+        0 0 22px rgba(126, 103, 255, 0.22),
+        7px 8px 14px rgba(0, 0, 0, 0.35),
+        -3px -3px 9px rgba(255, 255, 255, 0.08),
+        inset 1px 1px 0 rgba(255, 255, 255, 0.35),
+        inset -1px -1px 0 rgba(0, 0, 0, 0.16);
+    }
+
+    .auraan-progress {
+      margin-top: 12px;
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #090d12;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      box-shadow:
+        inset 2px 2px 5px rgba(0, 0, 0, 0.52),
+        inset -1px -1px 0 rgba(255, 255, 255, 0.025);
+      position: relative;
+      z-index: 1;
+    }
+
+    .auraan-progress > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background:
+        linear-gradient(90deg, #7560f2 0%, #c07cff 55%, #ff6c9e 100%);
+      box-shadow:
+        0 0 12px rgba(169, 112, 255, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.20);
+    }
+
+    .auraan-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+      color: rgba(238, 242, 246, 0.34);
+      font-size: 10px;
+      gap: 8px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .auraan-badge {
+      padding: 4px 8px;
+      border-radius: 9px;
+      background: #111821;
+      border: 1px solid rgba(255, 255, 255, 0.055);
+      box-shadow:
+        inset 2px 2px 5px rgba(0, 0, 0, 0.34),
+        inset -1px -1px 0 rgba(255, 255, 255, 0.035);
+    }
+
+    @media (max-width: 360px) {
+      .auraan-float {
+        padding: 9px;
+      }
+
+      .auraan-card {
+        padding: 10px;
+        border-radius: 18px;
+      }
+
+      .auraan-row {
+        gap: 8px;
+      }
+
+      .auraan-cover {
+        width: 48px;
+        height: 48px;
+        flex-basis: 48px;
+        border-radius: 13px;
+      }
+
+      .auraan-title {
+        font-size: 13px;
+      }
+
+      .auraan-artist {
+        margin-top: 3px;
+        font-size: 10px;
+      }
+
+      .auraan-icon {
+        width: 32px;
+        height: 32px;
+        flex-basis: 32px;
+      }
+
+      .auraan-controls {
+        gap: 7px;
+        margin-top: 10px;
+      }
+
+      .auraan-main {
+        width: 42px;
+        height: 42px;
+        flex-basis: 42px;
+      }
+
+      .auraan-progress {
+        margin-top: 9px;
+      }
+
+      .auraan-footer {
+        margin-top: 7px;
+        font-size: 9px;
+      }
+    }
+
+    @media (min-width: 520px) and (min-height: 300px) {
+      .auraan-float {
+        padding: 20px;
+      }
+
+      .auraan-card {
+        padding: 18px;
+        border-radius: 26px;
+      }
+
+      .auraan-row {
+        gap: 14px;
+      }
+
+      .auraan-cover {
+        width: 78px;
+        height: 78px;
+        flex-basis: 78px;
+        border-radius: 19px;
+      }
+
+      .auraan-title {
+        font-size: 17px;
+      }
+
+      .auraan-artist {
+        font-size: 13px;
+      }
+
+      .auraan-icon {
+        width: 40px;
+        height: 40px;
+        flex-basis: 40px;
+      }
+
+      .auraan-controls {
+        gap: 12px;
+        margin-top: 16px;
+      }
+
+      .auraan-main {
+        width: 52px;
+        height: 52px;
+        flex-basis: 52px;
+      }
+
+      .auraan-progress {
+        margin-top: 14px;
+      }
+
+      .auraan-footer {
+        margin-top: 11px;
+        font-size: 11px;
+      }
+    }
+  `
+
+  const closeFloatingPlayer = () => {
+    try {
+      floatingPlayerWindowRef.current?.close()
+    } catch {
+      // The browser may already have closed the PiP window.
+    }
+
+    floatingPlayerWindowRef.current = null
+    floatingPlayerRootRef.current = null
+    setFloatingPlayerRoot(null)
+  }
+
+  const openFloatingPlayer = async () => {
+    if (!currentSong) return
+
+    setFloatingPlayerError('')
+
+    try {
+      const existingWindow = floatingPlayerWindowRef.current
+
+      if (existingWindow && !existingWindow.closed) {
+        existingWindow.focus?.()
+        return
+      }
+
+      const documentPiP = window.documentPictureInPicture
+
+      if (!documentPiP?.requestWindow) {
+        setFloatingPlayerError(
+          'Floating player is not supported by this browser.',
+        )
+        return
+      }
+
+      const pipWindow = await documentPiP.requestWindow({
+        width: 410,
+        height: 230,
+        disallowReturnToOpener: true,
+      })
+
+      const root = pipWindow.document.createElement('div')
+      root.id = 'auraan-floating-player-root'
+      pipWindow.document.body.appendChild(root)
+
+      const style = pipWindow.document.createElement('style')
+      style.textContent = floatingPlayerStyles
+      pipWindow.document.head.appendChild(style)
+
+      pipWindow.document.title = `AURAAN — ${currentSong.title}`
+      pipWindow.document.body.className = 'auraan-float'
+
+      const handlePageHide = () => {
+        if (floatingPlayerWindowRef.current === pipWindow) {
+          floatingPlayerWindowRef.current = null
+          floatingPlayerRootRef.current = null
+          setFloatingPlayerRoot(null)
+        }
+      }
+
+      pipWindow.addEventListener('pagehide', handlePageHide)
+
+      floatingPlayerWindowRef.current = pipWindow
+      floatingPlayerRootRef.current = root
+      setFloatingPlayerRoot(root)
+    } catch (error) {
+      console.error('AURAAN floating player error:', error)
+      setFloatingPlayerError(
+        error?.message || 'Unable to open the floating player.',
+      )
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      try {
+        floatingPlayerWindowRef.current?.close()
+      } catch {
+        // Ignore cleanup errors during unmount.
+      }
+
+      floatingPlayerWindowRef.current = null
+      floatingPlayerRootRef.current = null
+    }
+  }, [])
 
   /*
    * Record a real playable track when it actually starts playing.
@@ -1067,8 +1745,8 @@ function App() {
   /*
    * Search
    */
-  const handleSearch = async () => {
-    const query = searchText.trim()
+  const handleSearch = async (searchValue = searchText) => {
+    const query = String(searchValue || '').trim()
     const normalizedQuery = query.replace(/\s+/g, ' ')
 
     if (!normalizedQuery) {
@@ -1101,6 +1779,15 @@ function App() {
       return
     }
 
+    if (user?.id) {
+      setSearchHistory(
+        addSearchHistoryEntry(
+          user.id,
+          normalizedQuery,
+        ),
+      )
+    }
+
     if (
       lastSearchQueryRef.current ===
         normalizedQuery &&
@@ -1119,6 +1806,7 @@ function App() {
     setShowSearchSheet(false)
     setSearchStatus('loading')
     setSearchError('')
+    setIsSearchHistoryOpen(false)
     setSubmittedQuery(normalizedQuery)
     setSearchVeromeArtistResults([])
     setSearchFilter('All')
@@ -1569,6 +2257,7 @@ function App() {
 
   const handleClearSearch = () => {
     setSearchText('')
+    setIsSearchHistoryOpen(true)
 
     searchRequestIdRef.current += 1
     artistRequestIdRef.current += 1
@@ -1596,6 +2285,43 @@ function App() {
     setHasMoreResults(false)
   }
 
+  const handleRemoveSearchHistoryEntry = (entry) => {
+    const normalizedEntry = normalizeSearchHistoryEntry(entry)
+
+    if (!normalizedEntry || !user?.id) return
+
+    setSearchHistory((current) => {
+      const next = current.filter(
+        (item) =>
+          normalizeSearchText(item) !==
+          normalizeSearchText(normalizedEntry),
+      )
+
+      writeSearchHistoryForUser(user.id, next)
+      setIsSearchHistoryOpen(Boolean(next.length))
+
+      return next
+    })
+  }
+
+  const handleClearSearchHistory = () => {
+    if (!user?.id) return
+
+    writeSearchHistoryForUser(user.id, [])
+    setSearchHistory([])
+    setIsSearchHistoryOpen(false)
+  }
+
+  const handleSearchHistorySelect = (entry) => {
+    const normalizedEntry = normalizeSearchHistoryEntry(entry)
+
+    if (!normalizedEntry) return
+
+    setSearchText(normalizedEntry)
+    setIsSearchHistoryOpen(false)
+    void handleSearch(normalizedEntry)
+  }
+
   /*
    * Open search.
    */
@@ -1608,6 +2334,7 @@ function App() {
     if (isDesktop) {
       setShowSearchSheet(false)
       setActiveTab('Browse')
+      setIsSearchHistoryOpen(true)
 
       window.requestAnimationFrame(() => {
         searchInputRef.current?.focus()
@@ -1617,6 +2344,7 @@ function App() {
     }
 
     setShowSearchSheet(true)
+    setIsSearchHistoryOpen(true)
   }
 
   /*
@@ -1643,6 +2371,75 @@ function App() {
       true,
     )
   }
+
+  const handleSingleOpen = async (single) => {
+  if (!single) return
+
+  try {
+    const response = await searchVerome(
+      single.title || '',
+    )
+
+    const results = Array.isArray(response?.results)
+      ? response.results
+      : []
+
+    const matchingSong = results
+      .filter(
+        (result) =>
+          result?.type === 'song' ||
+          result?.resultType === 'song',
+      )
+      .map(normalizeVeromeSong)
+      .filter(Boolean)
+      .find((song) => {
+        const singleTitle = normalizeSearchText(
+          single.title,
+        )
+
+        const songTitle = normalizeSearchText(
+          song.title,
+        )
+
+        const singleArtist = normalizeSearchText(
+          single.artist ||
+            selectedArtist?.name ||
+            '',
+        )
+
+        const songArtist = normalizeSearchText(
+          song.artist || '',
+        )
+
+        return (
+          songTitle === singleTitle &&
+          (!singleArtist ||
+            !songArtist ||
+            songArtist.includes(singleArtist) ||
+            singleArtist.includes(songArtist))
+        )
+      })
+
+    if (!matchingSong) {
+      console.warn(
+        'Unable to resolve Verome single:',
+        single,
+      )
+      return
+    }
+
+    await handleOpenPlayer(
+      matchingSong,
+      [matchingSong],
+      true,
+    )
+  } catch (error) {
+    console.error(
+      'Failed to open Verome single:',
+      error,
+    )
+  }
+}
 
   const handleOpenPlayer = (
   song,
@@ -2105,10 +2902,23 @@ function App() {
       )
 
       setSelectedArtistSingles(
-        Array.isArray(response.singles)
-          ? response.singles
-          : [],
-      )
+  Array.isArray(response.singles)
+    ? response.singles
+        .map((single) =>
+          normalizeVeromeSong({
+            ...single,
+            provider:
+              single?.provider ||
+              'verome',
+          }),
+        )
+        .filter(Boolean)
+        .filter(
+          (single) =>
+            single.playable !== false,
+        )
+    : [],
+)
 
       const hasSongs =
         Array.isArray(response.songs) &&
@@ -2336,9 +3146,7 @@ function App() {
               )}
             </div>
 
-            <p className="text-xs leading-5 text-white/30">
-              Video playback appears in the Now Playing panel.
-            </p>
+            
           </section>
         ) : null}
 
@@ -2410,9 +3218,14 @@ function App() {
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               {selectedArtistSingles.map(
                 (single) => (
-                  <div
+                  <button
                     key={`${single.provider || 'verome'}-${single.id || single.title}`}
-                    className="min-w-0 rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-3 text-left"
+                    type="button"
+                    onClick={() => {
+                      void handleSingleOpen(single)
+                    }}
+                    className="min-w-0 w-full rounded-[20px] border border-white/[0.08] bg-white/[0.035] p-3 text-left transition hover:border-white/[0.14] hover:bg-white/[0.055] active:scale-[0.98]"
+                    aria-label={`Play ${single.title}`}
                   >
                     <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-[#18191d] ring-1 ring-white/[0.08]">
                       <Artwork
@@ -2429,7 +3242,7 @@ function App() {
                     <p className="mt-1 text-xs text-white/40">
                       {single.year || 'Single'}
                     </p>
-                  </div>
+                  </button>
                 ),
               )}
             </div>
@@ -3511,6 +4324,7 @@ function App() {
             <input
               ref={searchInputRef}
               value={searchText}
+              onFocus={() => setIsSearchHistoryOpen(true)}
               onChange={(event) =>
                 setSearchText(event.target.value)
               }
@@ -3531,6 +4345,66 @@ function App() {
             ) : null}
           </div>
         </section>
+
+        {isSearchHistoryOpen &&
+        searchHistory.length &&
+        searchStatus !== 'loading' &&
+        searchStatus !== 'error' ? (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-white/75">
+                Recent searches
+              </h3>
+
+              <button
+                type="button"
+                onClick={handleClearSearchHistory}
+                className="text-xs text-white/35 transition hover:text-white/75"
+              >
+                Clear
+              </button>
+            </div>
+
+            <div className="rounded-[20px] border border-white/[0.07] bg-[#101114] p-2">
+              <div className="space-y-1">
+                {searchHistory.map((entry) => (
+                  <div
+                    key={entry}
+                    className="flex items-center gap-2 rounded-xl px-3 py-2.5 transition hover:bg-white/[0.04]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSearchHistorySelect(entry)
+                      }
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
+                      <Search
+                        size={15}
+                        className="shrink-0 text-white/30"
+                      />
+
+                      <span className="truncate text-sm text-white/65">
+                        {entry}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleRemoveSearchHistoryEntry(entry)
+                      }
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/25 transition hover:bg-white/[0.06] hover:text-white/70"
+                      aria-label={`Remove ${entry} from search history`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         {searchStatus !== 'idle' ? (
           <section className="space-y-5">
@@ -4237,6 +5111,7 @@ function App() {
           <input
             autoFocus
             value={searchText}
+            onFocus={() => setIsSearchHistoryOpen(true)}
             onChange={(event) =>
               setSearchText(event.target.value)
             }
@@ -4257,9 +5132,66 @@ function App() {
           ) : null}
         </div>
 
-        <p className="mt-4 text-xs leading-5 text-white/35">
-          Search artists, albums, or songs.
-        </p>
+        {searchHistory.length ? (
+          <div className="mt-5">
+            <div className="flex items-center justify-between gap-3 px-1">
+              <p className="text-xs font-medium text-white/55">
+                Recent searches
+              </p>
+
+              <button
+                type="button"
+                onClick={handleClearSearchHistory}
+                className="text-xs text-white/35 transition hover:text-white/75"
+              >
+                Clear
+              </button>
+            </div>
+
+            <div className="mt-2 rounded-2xl border border-white/[0.07] bg-[#0b0c0f] p-2">
+              <div className="space-y-1">
+                {searchHistory.map((entry) => (
+                  <div
+                    key={entry}
+                    className="flex items-center gap-2 rounded-xl px-2 py-2 transition hover:bg-white/[0.04]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleSearchHistorySelect(entry)
+                      }
+                      className="flex min-w-0 flex-1 items-center gap-3 px-1 text-left"
+                    >
+                      <Search
+                        size={14}
+                        className="shrink-0 text-white/30"
+                      />
+
+                      <span className="truncate text-sm text-white/65">
+                        {entry}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleRemoveSearchHistoryEntry(entry)
+                      }
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white/25 transition hover:bg-white/[0.06] hover:text-white/70"
+                      aria-label={`Remove ${entry} from search history`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-4 text-xs leading-5 text-white/35">
+            Search artists, albums, or songs.
+          </p>
+        )}
       </div>
     </div>
   )
@@ -4332,11 +5264,10 @@ function App() {
 
               <button
                 type="button"
-                onClick={() =>
-                  setIsLyricsOpen(true)
-                }
+                onClick={() => setQueueOpen(true)}
                 className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-white/70 transition hover:bg-white/[0.07] active:scale-95"
-                aria-label="Open lyrics"
+                aria-label="Open queue"
+                title="Open queue"
               >
                 <ListMusic size={18} />
               </button>
@@ -4388,6 +5319,19 @@ function App() {
                 total={activeDuration}
                 onChange={seekTo}
               />
+            </div>
+
+            <div className="mx-auto mt-6 flex max-w-xl justify-center lg:justify-end">
+              <button
+                type="button"
+                onClick={() => void openFloatingPlayer()}
+                className="hidden min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-medium text-white/55 transition hover:bg-white/[0.07] hover:text-white lg:inline-flex"
+                aria-label="Open floating player"
+                title="Open floating player"
+              >
+                <PictureInPicture size={15} />
+                Floating player
+              </button>
             </div>
 
             <div className="mx-auto mt-7 flex max-w-xl items-center justify-between px-1 sm:px-4">
@@ -5067,8 +6011,8 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#08090b] text-white selection:bg-white/15 selection:text-white">
-      <div className="mx-auto flex min-h-screen max-w-[1500px] flex-col lg:flex-row">
+    <div className="auraan-app min-h-screen bg-[#08090b] text-white selection:bg-white/15 selection:text-white">
+      <div className="auraan-layout mx-auto flex min-h-screen max-w-[1500px] flex-col lg:flex-row">
         <DesktopSidebar
           activeTab={activeTab}
           onSelectTab={(tab) => {
@@ -5089,7 +6033,7 @@ function App() {
             onSignOut={handleSignOut}
         />
 
-        <main className="order-last relative min-w-0 flex-1 overflow-hidden bg-[#090a0c] lg:order-none">
+        <main className="auraan-main order-last relative min-w-0 flex-1 overflow-hidden bg-[#090a0c] lg:order-none">
           <TopBar
             title={activeTab}
             searchValue={searchText}
@@ -5103,7 +6047,7 @@ function App() {
         </main>
 
         <aside
-          className="order-first w-full shrink-0 border-b border-white/[0.07] bg-[#0b0c0f] lg:order-none lg:w-[360px] lg:border-b-0 lg:border-l lg:border-white/[0.07]"
+          className="auraan-now-playing order-last w-full shrink-0 border-b border-white/[0.07] bg-[#0b0c0f] lg:order-none lg:w-[360px] lg:border-b-0 lg:border-l lg:border-white/[0.07]"
           aria-label="Now playing"
         >
           <div className="p-4 sm:p-5 lg:sticky lg:top-0 lg:h-screen lg:overflow-y-auto lg:p-5">
@@ -5118,6 +6062,15 @@ function App() {
                 </h2>
               </div>
 
+              <button
+                type="button"
+                onClick={() => void openFloatingPlayer()}
+                className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.025] text-white/45 transition hover:bg-white/[0.07] hover:text-white lg:flex"
+                aria-label="Open floating player"
+                title="Open floating player"
+              >
+                <PictureInPicture size={16} />
+              </button>
             </div>
 
             <div className="mt-4 overflow-hidden rounded-[22px] border border-white/[0.08] bg-[#101114] shadow-[0_20px_60px_rgba(0,0,0,0.3)]">
@@ -5319,6 +6272,198 @@ function App() {
             setQueueOpen(true)
           }
         />
+      ) : null}
+
+      {floatingPlayerRoot
+        ? createPortal(
+            <div className="auraan-card">
+              {currentSong ? (
+                <>
+                  <div className="auraan-row">
+                    <div className="auraan-cover">
+                      {currentSong.artwork ? (
+                        <img src={currentSong.artwork} alt="" />
+                      ) : null}
+                    </div>
+
+                    <div className="auraan-meta">
+                      <div className="auraan-title">
+                        {currentSong.title}
+                      </div>
+                      <div className="auraan-artist">
+                        {currentSong.artist}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className={`auraan-icon ${
+                        favorites.some((item) =>
+                          sameTrack(item, currentSong),
+                        )
+                          ? 'auraan-fav-active'
+                          : ''
+                      }`}
+                      onClick={() => {
+                        void handleToggleFavorite(currentSong)
+                      }}
+                      aria-label={
+                        favorites.some((item) =>
+                          sameTrack(item, currentSong),
+                        )
+                          ? 'Remove from favorites'
+                          : 'Add to favorites'
+                      }
+                      title="Favorite"
+                    >
+                      <Heart
+                        size={16}
+                        fill={
+                          favorites.some((item) =>
+                            sameTrack(item, currentSong),
+                          )
+                            ? 'currentColor'
+                            : 'none'
+                        }
+                      />
+                    </button>
+
+                    <button
+                      type="button"
+                      className="auraan-icon"
+                      onClick={closeFloatingPlayer}
+                      aria-label="Close floating player"
+                      title="Close"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  <div className="auraan-controls">
+                    <button
+                      type="button"
+                      className="auraan-icon"
+                      onClick={() => {
+                        void previousPlayerTrack()
+                      }}
+                      aria-label="Previous track"
+                      title="Previous"
+                    >
+                      <SkipBack size={17} />
+                    </button>
+
+                    <button
+                      type="button"
+                      className="auraan-main"
+                      onClick={() => {
+                        void togglePlay()
+                      }}
+                      aria-label={isPlaying ? 'Pause' : 'Play'}
+                      title={isPlaying ? 'Pause' : 'Play'}
+                    >
+                      {isPlaying ? (
+                        <Pause size={19} fill="currentColor" />
+                      ) : (
+                        <Play size={19} fill="currentColor" />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="auraan-icon"
+                      onClick={() => {
+                        void nextPlayerTrack()
+                      }}
+                      aria-label="Next track"
+                      title="Next"
+                    >
+                      <SkipForward size={17} />
+                    </button>
+
+                    <button
+                      type="button"
+                      className={`auraan-icon ${
+                        isShuffle ? 'auraan-fav-active' : ''
+                      }`}
+                      onClick={() =>
+                        setIsShuffle((value) => !value)
+                      }
+                      aria-label="Toggle shuffle"
+                      title="Shuffle"
+                    >
+                      <Shuffle size={15} />
+                    </button>
+
+                    <button
+                      type="button"
+                      className={`auraan-icon ${
+                        isRepeat ? 'auraan-fav-active' : ''
+                      }`}
+                      onClick={() =>
+                        setIsRepeat((value) => !value)
+                      }
+                      aria-label="Toggle repeat"
+                      title="Repeat"
+                    >
+                      <Repeat size={15} />
+                    </button>
+                  </div>
+
+                  <div className="auraan-progress">
+                    <span
+                      style={{
+                        width: `${
+                          Number(playerDuration) > 0
+                            ? Math.max(
+                                0,
+                                Math.min(
+                                  100,
+                                  (Number(currentTime) /
+                                    Number(playerDuration)) *
+                                    100,
+                                ),
+                              )
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="auraan-footer">
+                    <span className="auraan-badge">
+                      {formatTime(currentTime)}
+                    </span>
+
+                    <button
+                      type="button"
+                      className="auraan-badge"
+                      onClick={() => setActiveTab('Player')}
+                      style={{
+                        cursor: 'pointer',
+                        color: 'rgba(255,255,255,.58)',
+                      }}
+                    >
+                      Open AURAAN
+                    </button>
+
+                    <span className="auraan-badge">
+                      {formatTime(
+                        playerDuration ||
+                          currentSong.durationSeconds,
+                      )}
+                    </span>
+                  </div>
+                </>
+              ) : null}
+            </div>,
+            floatingPlayerRoot,
+          )
+        : null}
+
+      {floatingPlayerError ? (
+        <div className="fixed bottom-24 right-4 z-[120] max-w-sm rounded-2xl border border-white/10 bg-[#101114] px-4 py-3 text-xs text-white/70 shadow-2xl lg:bottom-6">
+          {floatingPlayerError}
+        </div>
       ) : null}
 
       <BottomNav

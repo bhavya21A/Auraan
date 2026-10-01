@@ -10,7 +10,7 @@ function QueuePanel({
     return (
       <section className="rounded-[28px] border border-white/10 bg-white/[0.025] p-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.05] text-white/70">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/[0.06] bg-[#1b2129] text-white/75">
             <ListMusic size={18} />
           </div>
 
@@ -28,8 +28,8 @@ function QueuePanel({
   }
 
   return (
-    <section className="overflow-hidden rounded-[28px] border border-white/10 bg-white/[0.025]">
-      <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+    <section className="overflow-hidden rounded-[28px] border border-white/[0.09] bg-[#10141a] shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
+      <div className="flex items-center justify-between border-b border-white/[0.08] bg-[#141920] px-5 py-4">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.05] text-white/70">
             <ListMusic size={18} />
@@ -45,12 +45,12 @@ function QueuePanel({
           </div>
         </div>
 
-        <span className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-white/40">
+        <span className="rounded-full border border-white/[0.08] bg-[#1b2122] px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-white/55">
           Up next
         </span>
       </div>
 
-      <div className="max-h-[420px] overflow-y-auto p-2">
+      <div className="max-h-[420px] overflow-y-auto bg-[#0d1116] p-2">
         {queue.map((track, index) => {
           const isCurrent = currentSong?.id === track?.id &&
             (!currentSong?.provider || currentSong?.provider === track?.provider)
@@ -60,10 +60,10 @@ function QueuePanel({
               key={`${track.provider || 'local'}-${track.id}-${index}`}
               type="button"
               onClick={() => onSelectTrack(track)}
-              className={`group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition ${
+              className={`group flex w-full items-center gap-3 rounded-2xl border border-transparent px-3 py-2.5 text-left transition ${
                 isCurrent
-                  ? 'bg-white/[0.08]'
-                  : 'hover:bg-white/[0.045]'
+                  ? 'border-white/[0.08] bg-[#1b2028] shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]'
+                  : 'hover:border-white/[0.05] hover:bg-[#151a21]'
               }`}
             >
               <div className="flex w-7 shrink-0 items-center justify-center">
@@ -89,7 +89,7 @@ function QueuePanel({
               <div className="min-w-0 flex-1">
                 <p
                   className={`truncate text-sm font-medium ${
-                    isCurrent ? 'text-white' : 'text-white/80'
+                    isCurrent ? 'text-white' : 'text-white/75'
                   }`}
                 >
                   {track.title || 'Unknown title'}
