@@ -22,7 +22,7 @@ function MiniPlayer({
       : 0
 
   return (
-    <div className="fixed inset-x-0 bottom-[76px] z-30 px-3 pb-2 lg:bottom-4 lg:px-6">
+    <div className="fixed inset-x-0 bottom-[76px] z-30 px-3 pb-2 lg:bottom-4 lg:left-[280px] lg:right-4 lg:px-0">
       <div className="mx-auto max-w-5xl rounded-[26px] border border-white/10 bg-[#151821]/90 p-2 shadow-[0_20px_60px_rgba(0,0,0,0.55)] backdrop-blur-xl">
         <div className="flex w-full items-center gap-3 rounded-[22px] bg-white/[0.03] px-2 py-2 text-left">
           {/* Track information */}

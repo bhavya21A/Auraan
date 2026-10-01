@@ -1,8 +1,10 @@
+
 import {
   Home,
   Compass,
   Radio,
   Library,
+  UserRound,
 } from 'lucide-react'
 
 const navItems = [
@@ -28,64 +30,100 @@ const navItems = [
   },
 ]
 
+function getInitial(name = '') {
+  const value = String(name).trim()
+
+  if (!value) {
+    return 'U'
+  }
+
+  return value.charAt(0).toUpperCase()
+}
+
 function BottomNav({
   activeTab,
   onSelectTab,
+  profileName = '',
+  user = null,
+  onOpenAccount,
 }) {
+  const displayName =
+    profileName ||
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.user_metadata?.user_name ||
+    user?.email?.split('@')[0] ||
+    'User'
+
   return (
-    <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.06] bg-[#08090B]/92 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden"
-      aria-label="Primary navigation"
-    >
-      <div className="mx-auto grid max-w-md grid-cols-4 gap-1 px-2 py-2">
-        {navItems.map(
-          ({ id, icon: Icon, label }) => {
-            const isActive =
-              activeTab === id
+    <>
+      {/* Mobile account button */}
+      <button
+        type="button"
+        onClick={onOpenAccount}
+        className="fixed bottom-[82px] right-4 z-40 flex h-12 w-12 touch-manipulation items-center justify-center rounded-full border border-white/10 bg-[#151821]/95 text-sm font-semibold text-[#A9A4FF] shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-xl transition active:scale-95 lg:hidden"
+        aria-label={`Open account for ${displayName}`}
+        title="Account"
+      >
+        {getInitial(displayName)}
+      </button>
 
-            return (
-              <button
-                key={id}
-                type="button"
-                onClick={() =>
-                  onSelectTab(id)
-                }
-                aria-current={
-                  isActive
-                    ? 'page'
-                    : undefined
-                }
-                aria-label={label}
-                className={`relative flex min-h-[64px] touch-manipulation flex-col items-center justify-center rounded-2xl border px-2 py-2 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7567F8]/50 ${
-                  isActive
-                    ? 'border-white/[0.08] bg-white/[0.07] text-white'
-                    : 'border-transparent text-white/45 hover:bg-white/[0.035] hover:text-white/80'
-                }`}
-              >
-                {isActive ? (
-                  <span
-                    className="absolute top-1.5 h-0.5 w-5 rounded-full bg-[#7567F8]"
-                    aria-hidden="true"
-                  />
-                ) : null}
+      {/* Primary navigation */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.06] bg-[#08090B]/92 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden"
+        aria-label="Primary navigation"
+      >
+        <div className="mx-auto grid max-w-md grid-cols-4 gap-1 px-2 py-2">
+          {navItems.map(
+            ({ id, icon: Icon, label }) => {
+              const isActive =
+                activeTab === id
 
-                <Icon
-                  size={20}
-                  strokeWidth={
-                    isActive ? 2 : 1.8
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() =>
+                    onSelectTab(id)
                   }
-                />
+                  aria-current={
+                    isActive
+                      ? 'page'
+                      : undefined
+                  }
+                  aria-label={label}
+                  className={`relative flex min-h-[64px] touch-manipulation flex-col items-center justify-center rounded-2xl border px-2 py-2 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7567F8]/50 ${
+                    isActive
+                      ? 'border-white/[0.08] bg-white/[0.07] text-white'
+                      : 'border-transparent text-white/45 hover:bg-white/[0.035] hover:text-white/80'
+                  }`}
+                >
+                  {isActive ? (
+                    <span
+                      className="absolute top-1.5 h-0.5 w-5 rounded-full bg-[#7567F8]"
+                      aria-hidden="true"
+                    />
+                  ) : null}
 
-                <span className="mt-1 text-[10px] font-medium uppercase tracking-[0.08em]">
-                  {label}
-                </span>
-              </button>
-            )
-          },
-        )}
-      </div>
-    </nav>
+                  <Icon
+                    size={20}
+                    strokeWidth={
+                      isActive ? 2 : 1.8
+                    }
+                  />
+
+                  <span className="mt-1 text-[10px] font-medium uppercase tracking-[0.08em]">
+                    {label}
+                  </span>
+                </button>
+              )
+            },
+          )}
+        </div>
+      </nav>
+    </>
   )
 }
 
 export default BottomNav
+

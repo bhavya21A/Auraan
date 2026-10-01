@@ -1666,7 +1666,7 @@ function App() {
     }
   }, [user?.id])
 
-  const handleSignOut = async () => {
+ const handleSignOut = async () => {
   try {
     const { error } = await supabase.auth.signOut()
 
@@ -1675,52 +1675,55 @@ function App() {
       return
     }
 
-    // Immediately clear the local authenticated state.
-    // onAuthStateChange will also receive SIGNED_OUT.
+    // Clear authenticated user immediately.
     setUser(null)
 
-    // Reset app state.
+    // Reset navigation and music state.
     setActiveTab('Home')
     setSelectedPlaylist(null)
     setSelectedAlbum(null)
     setSelectedAlbumSongs([])
     setAlbumStatus('idle')
     setAlbumError('')
+
     setSearchText('')
     setSearchResults([])
     setSearchVeromeArtistResults([])
     setSearchFilter('All')
     setSearchAlbum(null)
     setSearchAlbumResults([])
-    setSelectedAlbum(null)
-    setSelectedAlbumSongs([])
-    setAlbumStatus('idle')
-    setAlbumError('')
+    setSearchStatus('idle')
+    setSearchError('')
+    setSubmittedQuery('')
+
     setSelectedArtist(null)
     setSelectedArtistSongs([])
     setSelectedArtistAlbums([])
     setSelectedArtistSingles([])
     setArtistStatus('idle')
     setArtistError('')
-    setSearchStatus('idle')
-    setSearchError('')
-    setSubmittedQuery('')
+
     setIsLoadingMore(false)
     setLoadMoreError('')
     setHasMoreResults(false)
+
     setRecentlyPlayed([])
     setListeningHistory([])
     setFavorites([])
     setPlaylists([])
+
     setPlaylistModal({
       open: false,
       mode: null,
       song: null,
     })
+
     setPlaylistName('')
     setPlaylistError('')
     setQueueOpen(false)
     setIsLyricsOpen(false)
+
+    console.log('AURAAN: sign out successful')
   } catch (error) {
     console.error('Sign out failed:', error)
   }
