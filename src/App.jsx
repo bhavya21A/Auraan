@@ -57,51 +57,96 @@ const SEARCH_ALBUM_PAGES = 4
 const SEARCH_HISTORY_LIMIT = 12
 const SEARCH_HISTORY_STORAGE_PREFIX = 'auraan:search-history:'
 
+let searchHistoryStorage
+
+const searchHistoryMemory = new Map()
+
+function getSearchHistoryStorage() {
+  if (searchHistoryStorage !== undefined) {
+    return searchHistoryStorage
+  }
+
+  if (typeof window === 'undefined') {
+    searchHistoryStorage = null
+    return searchHistoryStorage
+  }
+
+  try {
+    searchHistoryStorage = window.localStorage
+  } catch {
+    searchHistoryStorage = null
+  }
+
+  return searchHistoryStorage
+}
+
 function normalizeSearchHistoryEntry(value) {
   return String(value || '')
     .replace(/\s+/g, ' ')
     .trim()
 }
 
+function normalizeSearchHistoryEntries(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .map(normalizeSearchHistoryEntry)
+    .filter(Boolean)
+    .slice(0, SEARCH_HISTORY_LIMIT)
+}
+
 function readSearchHistoryForUser(userId) {
-  if (!userId || typeof window === 'undefined') return []
+  if (!userId) return []
+
+  const fallback =
+    searchHistoryMemory.get(userId) || []
+
+  const storage = getSearchHistoryStorage()
+
+  if (!storage) return fallback
 
   try {
-    const raw = window.localStorage.getItem(
+    const raw = storage.getItem(
       `${SEARCH_HISTORY_STORAGE_PREFIX}${userId}`,
     )
 
-    if (!raw) return []
+    if (!raw) return fallback
 
     const parsed = JSON.parse(raw)
 
-    if (!Array.isArray(parsed)) return []
+    if (!Array.isArray(parsed)) return fallback
 
-    return parsed
-      .map(normalizeSearchHistoryEntry)
-      .filter(Boolean)
-      .slice(0, SEARCH_HISTORY_LIMIT)
-  } catch (error) {
-    console.warn('Unable to read search history:', error)
-    return []
+    const entries = normalizeSearchHistoryEntries(parsed)
+
+    searchHistoryMemory.set(userId, entries)
+
+    return entries
+  } catch {
+    searchHistoryStorage = null
+    return fallback
   }
 }
 
 function writeSearchHistoryForUser(userId, entries) {
-  if (!userId || typeof window === 'undefined') return
+  if (!userId) return
+
+  const normalizedEntries =
+    normalizeSearchHistoryEntries(entries)
+
+  searchHistoryMemory.set(
+    userId,
+    normalizedEntries,
+  )
+
+  const storage = getSearchHistoryStorage()
+
+  if (!storage) return
 
   try {
-    window.localStorage.setItem(
+    storage.setItem(
       `${SEARCH_HISTORY_STORAGE_PREFIX}${userId}`,
-      JSON.stringify(
-        entries
-          .map(normalizeSearchHistoryEntry)
-          .filter(Boolean)
-          .slice(0, SEARCH_HISTORY_LIMIT),
-      ),
+      JSON.stringify(normalizedEntries),
     )
-  } catch (error) {
-    console.warn('Unable to save search history:', error)
+  } catch {
+    searchHistoryStorage = null
   }
 }
 
@@ -1999,18 +2044,16 @@ function App() {
           },
         )
 
-      /*
-       * Verome is the primary song source. Keep the song list
-       * exclusively on Verome whenever at least one usable Verome
-       * track is available. JioSaavn is only a fallback when Verome
-       * has no usable songs for this search.
-       */
-      const results =
-        veromeTracks.length > 0
-          ? veromeTracks
-          : dedupeTracks(
-              jioTracks.map(toUiSong),
-            )
+      const jioSearchTracks = jioTracks
+        .map(toUiSong)
+        .filter(
+          (track) => track?.playable !== false,
+        )
+
+      const results = dedupeTracks([
+        ...jioSearchTracks,
+        ...veromeTracks,
+      ])
 
       const albumResults = dedupeAlbums(
         albumPageResponses
@@ -2041,24 +2084,24 @@ function App() {
           .filter(Boolean)
 
       /*
-       * JioSaavn's album-search endpoint can sometimes return fewer
-       * albums than the song search exposes. Build additional album
-       * cards from the unique album metadata already present in the
-       * JioSaavn song results.
+       * Album-search endpoints can sometimes return fewer albums than
+       * the song search exposes. Build additional album cards from the
+       * unique album metadata already present in the song results.
        */
       const songDerivedAlbums = dedupeAlbums(
         results
           .filter(
             (song) =>
-              song?.provider ===
-                DEFAULT_PROVIDER &&
+              (song?.provider === DEFAULT_PROVIDER ||
+                (song?.provider === 'verome' &&
+                  song?.albumId)) &&
               song?.album,
           )
           .map((song) => ({
             id: song.albumId
               ? String(song.albumId)
               : `derived-album-${encodeURIComponent(song.album)}`,
-            provider: DEFAULT_PROVIDER,
+            provider: song.provider,
             title: song.album,
             artist:
               song.artist ||
@@ -2069,7 +2112,7 @@ function App() {
             songCount: results.filter(
               (candidate) =>
                 candidate?.provider ===
-                  DEFAULT_PROVIDER &&
+                  song.provider &&
                 normalizeSearchText(
                   candidate.album,
                 ) ===
@@ -2126,8 +2169,7 @@ function App() {
       }
 
       setHasMoreResults(
-        veromeTracks.length === 0 &&
-          songsResult.status === 'fulfilled' &&
+        songsResult.status === 'fulfilled' &&
           jioTracks.length >=
             SEARCH_PAGE_SIZE,
       )
@@ -2156,18 +2198,6 @@ function App() {
       !submittedQuery ||
       isLoadingMore ||
       !hasMoreResults
-    ) {
-      return
-    }
-
-    // JioSaavn pagination is only allowed while we are using the
-    // JioSaavn fallback. Never append JioSaavn tracks to a Verome
-    // result set.
-    if (
-      searchResults.some(
-        (track) =>
-          track?.provider === 'verome',
-      )
     ) {
       return
     }
@@ -5966,7 +5996,65 @@ function App() {
    * SCREEN ROUTER
    * =========================================================
    */
+  const renderProfileScreen = () => {
+    const displayName = profileName || 'User'
+    const email = user?.email || 'No email available'
+
+    return (
+      <div className="mx-auto w-full max-w-2xl space-y-5 pb-28 lg:pb-10">
+        <section className="rounded-[24px] border border-white/[0.07] bg-[#101114] p-6 sm:p-8">
+          <div className="flex flex-col items-center text-center">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full border border-white/10 bg-[#151821] text-2xl font-semibold text-[#A9A4FF]">
+              {displayName.charAt(0).toUpperCase()}
+            </div>
+
+            <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em] text-white">
+              {displayName}
+            </h1>
+            <p className="mt-1 text-sm text-white/45">{email}</p>
+          </div>
+        </section>
+
+        <section className="rounded-[24px] border border-white/[0.07] bg-[#101114] p-5 sm:p-6">
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-white/35">
+            Account
+          </p>
+
+          <div className="mt-4 space-y-3">
+            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-4 py-3">
+              <p className="text-xs text-white/35">Name</p>
+              <p className="mt-1 text-sm text-white/80">{displayName}</p>
+            </div>
+
+            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.025] px-4 py-3">
+              <p className="text-xs text-white/35">Email</p>
+              <p className="mt-1 break-all text-sm text-white/80">{email}</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-[24px] border border-white/[0.07] bg-[#101114] p-5 sm:p-6">
+          <p className="text-xs font-medium uppercase tracking-[0.16em] text-white/35">
+            Account actions
+          </p>
+
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="mt-4 flex min-h-12 w-full items-center justify-center rounded-xl border border-red-400/20 bg-red-400/[0.06] px-4 py-3 text-sm font-medium text-red-300 transition hover:bg-red-400/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40"
+          >
+            Sign out
+          </button>
+        </section>
+      </div>
+    )
+  }
+
   const renderScreen = () => {
+    if (activeTab === 'Profile') {
+      return renderProfileScreen()
+    }
+
     if (activeTab === 'Browse') {
       return renderBrowseScreen()
     }
@@ -6472,6 +6560,9 @@ function App() {
       <BottomNav
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
+        profileName={profileName}
+        user={user}
+        onOpenAccount={() => handleSelectTab('Profile')}
       />
     </div>
   )

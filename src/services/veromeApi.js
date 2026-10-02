@@ -143,6 +143,50 @@ const normalizeSearchResult = (
     resultType === 'artist' &&
     result.browseId
   ) {
+    if (/^\s*album(?:\s|$)/i.test(result.subtitle || '')) {
+      const subtitleParts = String(result.subtitle || '')
+        .split('\u2022')
+        .map((part) => part.trim())
+        .filter(Boolean)
+
+      const subtitleArtist = subtitleParts
+        .slice(1)
+        .find(
+          (part) => !/^(19|20)\d{2}$/.test(part),
+        )
+
+      const subtitleYear = String(result.subtitle || '').match(
+        /\b(19|20)\d{2}\b/,
+      )?.[0]
+
+      return {
+        type: 'album',
+        provider: 'verome',
+        id: String(
+          result.browseId,
+        ),
+        title:
+          result.title ||
+          'Unknown album',
+        artist:
+          result.artist ||
+          result.artistName ||
+          getArtistNames(
+            result.artists,
+          ).join(', ') ||
+          subtitleArtist ||
+          'Unknown artist',
+        artwork:
+          getThumbnail(result),
+        year:
+          result.year ||
+          subtitleYear ||
+          null,
+        subtitle:
+          result.subtitle || '',
+      }
+    }
+
     return {
       type: 'artist',
       provider: 'verome',

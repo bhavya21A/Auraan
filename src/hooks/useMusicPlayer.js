@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getStreamUrl } from '../services/musicApi'
 
 const STORAGE_KEY = 'music_player_state'
@@ -281,11 +281,18 @@ export function useMusicPlayer(
     restoredState.track
 
   const initialRestoredQueue =
-    restoredState.queue.length
-      ? restoredState.queue
-      : initialRestoredTrack
-        ? [initialRestoredTrack]
-        : []
+    useMemo(
+      () =>
+        restoredState.queue.length
+          ? restoredState.queue
+          : initialRestoredTrack
+            ? [initialRestoredTrack]
+            : [],
+      [
+        initialRestoredTrack,
+        restoredState.queue,
+      ],
+    )
 
   const audioRef =
     useRef(null)
