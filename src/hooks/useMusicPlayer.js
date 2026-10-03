@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { getStreamUrl } from '../services/musicApi'
 
 const STORAGE_KEY = 'music_player_state'
 const STORAGE_VERSION = 1
+
 const VEROME_PROVIDER = 'verome'
+
 const YOUTUBE_IFRAME_API_SRC =
   'https://www.youtube.com/iframe_api'
 
@@ -77,7 +85,9 @@ const getStorage = () => {
 }
 
 const sanitizeTrack = (track) => {
-  if (!isRealTrack(track)) return null
+  if (!isRealTrack(track)) {
+    return null
+  }
 
   const durationSeconds =
     parseTrackDuration(
@@ -157,7 +167,9 @@ const persistState = (
 ) => {
   const storage = getStorage()
 
-  if (!storage) return
+  if (!storage) {
+    return
+  }
 
   try {
     storage.setItem(
@@ -259,6 +271,23 @@ const loadYouTubeIframeApi = () => {
   return youtubeApiPromise
 }
 
+const getMediaArtwork = (track) => {
+  const artwork =
+    track?.artwork
+
+  if (!artwork) {
+    return undefined
+  }
+
+  return [
+    {
+      src: artwork,
+      sizes: '512x512',
+      type: 'image/png',
+    },
+  ]
+}
+
 export function useMusicPlayer(
   initialTrack = null,
 ) {
@@ -301,6 +330,18 @@ export function useMusicPlayer(
     useRef(0)
 
   const startTrackRef =
+    useRef(null)
+
+  const togglePlayRef =
+    useRef(null)
+
+  const nextTrackRef =
+    useRef(null)
+
+  const previousTrackRef =
+    useRef(null)
+
+  const seekToRef =
     useRef(null)
 
   const currentTrackRef =
@@ -443,6 +484,127 @@ export function useMusicPlayer(
       getCurrentPlaybackTime,
     ])
 
+  /*
+   * ---------------------------------------------------------
+   * MEDIA SESSION
+   * ---------------------------------------------------------
+   *
+   * This connects AURAAN's player to:
+   *
+   * - Android media notification
+   * - Android lock screen controls
+   * - Bluetooth headset controls
+   * - Earphone play/pause buttons
+   * - Browser media controls
+   *
+   * It only controls the native audio player.
+   *
+   * Verome / YouTube remains iframe based.
+   */
+  const updateMediaSession =
+    useCallback(
+      (track, playing, current, total) => {
+        if (
+          typeof navigator ===
+            'undefined' ||
+          !('mediaSession' in navigator)
+        ) {
+          return
+        }
+
+        const mediaSession =
+          navigator.mediaSession
+
+        if (!track) {
+          try {
+            mediaSession.metadata =
+              null
+          } catch {
+            // Ignore Media Session failures.
+          }
+
+          return
+        }
+
+        try {
+          if (
+            typeof MediaMetadata !==
+            'undefined'
+          ) {
+            mediaSession.metadata =
+              new MediaMetadata({
+                title:
+                  track.title ||
+                  'Unknown title',
+
+                artist:
+                  track.artist ||
+                  'Unknown artist',
+
+                album:
+                  track.album ||
+                  'AURAAN',
+
+                artwork:
+                  getMediaArtwork(
+                    track,
+                  ),
+              })
+          }
+        } catch {
+          // Some browsers may reject metadata.
+        }
+
+        try {
+          mediaSession.playbackState =
+            playing
+              ? 'playing'
+              : 'paused'
+        } catch {
+          // Ignore unsupported playbackState.
+        }
+
+        try {
+          const safeDuration =
+            Number(total)
+
+          const safePosition =
+            Number(current)
+
+          if (
+            Number.isFinite(
+              safeDuration,
+            ) &&
+            safeDuration > 0 &&
+            Number.isFinite(
+              safePosition,
+            )
+          ) {
+            mediaSession.setPositionState?.(
+              {
+                duration:
+                  safeDuration,
+
+                playbackRate: 1,
+
+                position:
+                  Math.min(
+                    Math.max(
+                      safePosition,
+                      0,
+                    ),
+                    safeDuration,
+                  ),
+              },
+            )
+          }
+        } catch {
+          // Ignore position-state failures.
+        }
+      },
+      [],
+    )
+
   const startVeromeProgress =
     useCallback(() => {
       stopVeromeProgress()
@@ -452,7 +614,9 @@ export function useMusicPlayer(
           const player =
             veromePlayerRef.current
 
-          if (!player) return
+          if (!player) {
+            return
+          }
 
           try {
             const nextTime =
@@ -527,8 +691,10 @@ export function useMusicPlayer(
                           {
                             width:
                               '100%',
+
                             height:
                               '100%',
+
                             videoId:
                               String(
                                 videoId,
@@ -541,7 +707,9 @@ export function useMusicPlayer(
                                 playsinline: 1,
                                 rel: 0,
                                 origin:
-                                  window.location.origin,
+                                  window
+                                    .location
+                                    .origin,
                               },
 
                             events: {
@@ -600,7 +768,7 @@ export function useMusicPlayer(
                                         )
                                       }
                                     } catch {
-                                      // Duration may load slightly later.
+                                      // Duration may load later.
                                     }
 
                                     return
@@ -663,7 +831,7 @@ export function useMusicPlayer(
                                             track?.id,
                                       )
 
-                                    const nextTrack =
+                                    const next =
                                       currentIndex >=
                                       0
                                         ? queueRef.current[
@@ -673,10 +841,10 @@ export function useMusicPlayer(
                                         : null
 
                                     if (
-                                      nextTrack
+                                      next
                                     ) {
                                       void startTrackRef.current?.(
-                                        nextTrack,
+                                        next,
                                         true,
                                       )
                                     }
@@ -743,6 +911,11 @@ export function useMusicPlayer(
       ],
     )
 
+  /*
+   * ---------------------------------------------------------
+   * NATIVE AUDIO PLAYER
+   * ---------------------------------------------------------
+   */
   useEffect(() => {
     const audio =
       new Audio()
@@ -750,6 +923,16 @@ export function useMusicPlayer(
     audio.preload =
       'metadata'
 
+    /*
+     * Important for mobile background playback.
+     *
+     * We intentionally do NOT attach the audio
+     * element to React's visible DOM.
+     *
+     * The browser can continue playing this
+     * audio element when the page is backgrounded
+     * when the platform/browser permits it.
+     */
     audioRef.current =
       audio
 
@@ -791,6 +974,13 @@ export function useMusicPlayer(
           restorePositionRef.current =
             0
         }
+
+        updateMediaSession(
+          currentTrackRef.current,
+          !audio.paused,
+          audio.currentTime,
+          audio.duration,
+        )
       }
 
     const handleTimeUpdate =
@@ -804,6 +994,13 @@ export function useMusicPlayer(
           queueRef.current,
           audio.currentTime,
         )
+
+        updateMediaSession(
+          currentTrackRef.current,
+          !audio.paused,
+          audio.currentTime,
+          audio.duration,
+        )
       }
 
     const handlePlay = () => {
@@ -813,6 +1010,13 @@ export function useMusicPlayer(
 
       setIsPlaying(
         true,
+      )
+
+      updateMediaSession(
+        currentTrackRef.current,
+        true,
+        audio.currentTime,
+        audio.duration,
       )
     }
 
@@ -826,6 +1030,13 @@ export function useMusicPlayer(
           currentTrackRef.current,
           queueRef.current,
           audio.currentTime,
+        )
+
+        updateMediaSession(
+          currentTrackRef.current,
+          false,
+          audio.currentTime,
+          audio.duration,
         )
       }
 
@@ -866,6 +1077,13 @@ export function useMusicPlayer(
           0,
         )
 
+        updateMediaSession(
+          currentTrackRef.current,
+          false,
+          0,
+          audio.duration,
+        )
+
         const track =
           currentTrackRef.current
 
@@ -878,7 +1096,7 @@ export function useMusicPlayer(
                 track?.id,
           )
 
-        const nextTrack =
+        const next =
           currentIndex >=
           0
             ? queueRef.current[
@@ -887,11 +1105,9 @@ export function useMusicPlayer(
               ]
             : null
 
-        if (
-          nextTrack
-        ) {
+        if (next) {
           void startTrackRef.current?.(
-            nextTrack,
+            next,
             true,
           )
         }
@@ -940,6 +1156,13 @@ export function useMusicPlayer(
 
         setIsLoading(
           false,
+        )
+
+        updateMediaSession(
+          currentTrackRef.current,
+          false,
+          audio.currentTime,
+          audio.duration,
         )
 
         setError(
@@ -1072,6 +1295,22 @@ export function useMusicPlayer(
         'error',
         handleError,
       )
+
+      if (
+        typeof navigator !==
+          'undefined' &&
+        'mediaSession' in navigator
+      ) {
+        try {
+          navigator.mediaSession.metadata =
+            null
+
+          navigator.mediaSession.playbackState =
+            'none'
+        } catch {
+          // Ignore cleanup failures.
+        }
+      }
     }
   }, [
     getCurrentPlaybackTime,
@@ -1079,8 +1318,14 @@ export function useMusicPlayer(
     initialRestoredTrack,
     restoredState.currentTime,
     stopVeromeProgress,
+    updateMediaSession,
   ])
 
+  /*
+   * ---------------------------------------------------------
+   * START TRACK
+   * ---------------------------------------------------------
+   */
   const startTrack =
     useCallback(
       async (
@@ -1129,6 +1374,11 @@ export function useMusicPlayer(
 
         setError('')
 
+        /*
+         * ---------------------------------------------------
+         * VEROME / YOUTUBE
+         * ---------------------------------------------------
+         */
         if (
           isVeromeTrack(
             track,
@@ -1275,10 +1525,17 @@ export function useMusicPlayer(
           return
         }
 
+        /*
+         * ---------------------------------------------------
+         * NATIVE AUDIO
+         * ---------------------------------------------------
+         */
         const audio =
           audioRef.current
 
-        if (!audio) return
+        if (!audio) {
+          return
+        }
 
         stopVeromeProgress()
 
@@ -1325,6 +1582,18 @@ export function useMusicPlayer(
           false,
         )
 
+        updateMediaSession(
+          track,
+          false,
+          isRestoringSameTrack
+            ? restorePositionRef.current
+            : 0,
+          parseTrackDuration(
+            track.durationSeconds ??
+              track.duration,
+          ),
+        )
+
         if (
           !isRestoringSameTrack
         ) {
@@ -1346,17 +1615,13 @@ export function useMusicPlayer(
                   cacheKey,
                 )
 
-          if (
-            !streamUrl
-          ) {
+          if (!streamUrl) {
             let streamRequest =
               streamRequestsRef.current.get(
                 cacheKey,
               )
 
-            if (
-              !streamRequest
-            ) {
+            if (!streamRequest) {
               streamRequest =
                 getStreamUrl(
                   track.id,
@@ -1437,6 +1702,13 @@ export function useMusicPlayer(
             false,
           )
 
+          updateMediaSession(
+            track,
+            false,
+            0,
+            duration,
+          )
+
           setError(
             'Unable to play this track.',
           )
@@ -1448,7 +1720,9 @@ export function useMusicPlayer(
       },
       [
         createVeromePlayer,
+        duration,
         stopVeromeProgress,
+        updateMediaSession,
       ],
     )
 
@@ -1460,16 +1734,9 @@ export function useMusicPlayer(
   ])
 
   /*
-   * playTrack
-   *
-   * replaceQueue = false
-   * -> keep the existing queue and add the track(s)
-   *
-   * replaceQueue = true
-   * -> completely replace the queue
-   *    with additionalTracks + track
-   *
-   * This is what Play Album will use.
+   * ---------------------------------------------------------
+   * PLAY TRACK
+   * ---------------------------------------------------------
    */
   const playTrack =
     async (
@@ -1526,6 +1793,11 @@ export function useMusicPlayer(
       )
     }
 
+  /*
+   * ---------------------------------------------------------
+   * TOGGLE PLAY
+   * ---------------------------------------------------------
+   */
   const togglePlay =
     async () => {
       const track =
@@ -1627,6 +1899,11 @@ export function useMusicPlayer(
       }
     }
 
+  /*
+   * ---------------------------------------------------------
+   * NEXT TRACK
+   * ---------------------------------------------------------
+   */
   const nextTrack =
     async () => {
       const track =
@@ -1691,6 +1968,11 @@ export function useMusicPlayer(
       )
     }
 
+  /*
+   * ---------------------------------------------------------
+   * SEEK
+   * ---------------------------------------------------------
+   */
   const seekTo =
     useCallback(
       (value) => {
@@ -1807,12 +2089,25 @@ export function useMusicPlayer(
           queueRef.current,
           audio.currentTime,
         )
+
+        updateMediaSession(
+          currentTrackRef.current,
+          !audio.paused,
+          audio.currentTime,
+          targetDuration,
+        )
       },
       [
         duration,
+        updateMediaSession,
       ],
     )
 
+  /*
+   * ---------------------------------------------------------
+   * PREVIOUS TRACK
+   * ---------------------------------------------------------
+   */
   const previousTrack =
     useCallback(
       async () => {
@@ -1823,9 +2118,7 @@ export function useMusicPlayer(
           currentPosition >
           3
         ) {
-          seekTo(
-            0,
-          )
+          seekTo(0)
 
           return
         }
@@ -1862,9 +2155,7 @@ export function useMusicPlayer(
           return
         }
 
-        seekTo(
-          0,
-        )
+        seekTo(0)
       },
       [
         getCurrentPlaybackTime,
@@ -1873,6 +2164,186 @@ export function useMusicPlayer(
       ],
     )
 
+  /*
+   * ---------------------------------------------------------
+   * KEEP MEDIA SESSION HANDLERS CONNECTED
+   * ---------------------------------------------------------
+   */
+  useEffect(() => {
+    togglePlayRef.current =
+      togglePlay
+  })
+
+  useEffect(() => {
+    nextTrackRef.current =
+      nextTrack
+  })
+
+  useEffect(() => {
+    previousTrackRef.current =
+      previousTrack
+  })
+
+  useEffect(() => {
+    seekToRef.current =
+      seekTo
+  }, [
+    seekTo,
+  ])
+
+  /*
+   * ---------------------------------------------------------
+   * REGISTER MEDIA NOTIFICATION CONTROLS
+   * ---------------------------------------------------------
+   */
+  useEffect(() => {
+    if (
+      typeof navigator ===
+        'undefined' ||
+      !('mediaSession' in navigator)
+    ) {
+      return
+    }
+
+    const mediaSession =
+      navigator.mediaSession
+
+    const registerAction =
+      (
+        action,
+        handler,
+      ) => {
+        try {
+          mediaSession.setActionHandler(
+            action,
+            handler,
+          )
+        } catch {
+          // Action not supported by this browser.
+        }
+      }
+
+    const clearAction =
+      (action) => {
+        try {
+          mediaSession.setActionHandler(
+            action,
+            null,
+          )
+        } catch {
+          // Ignore unsupported actions.
+        }
+      }
+
+    registerAction(
+      'play',
+      () => {
+        void togglePlayRef.current?.()
+      },
+    )
+
+    registerAction(
+      'pause',
+      () => {
+        void togglePlayRef.current?.()
+      },
+    )
+
+    registerAction(
+      'nexttrack',
+      () => {
+        void nextTrackRef.current?.()
+      },
+    )
+
+    registerAction(
+      'previoustrack',
+      () => {
+        void previousTrackRef.current?.()
+      },
+    )
+
+    registerAction(
+      'seekbackward',
+      (
+        details,
+      ) => {
+        const current =
+          getCurrentPlaybackTime()
+
+        const offset =
+          Number(
+            details?.seekOffset,
+          ) || 10
+
+        seekToRef.current?.(
+          Math.max(
+            0,
+            current - offset,
+          ),
+        )
+      },
+    )
+
+    registerAction(
+      'seekforward',
+      (
+        details,
+      ) => {
+        const current =
+          getCurrentPlaybackTime()
+
+        const offset =
+          Number(
+            details?.seekOffset,
+          ) || 10
+
+        seekToRef.current?.(
+          current + offset,
+        )
+      },
+    )
+
+    registerAction(
+      'seekto',
+      (
+        details,
+      ) => {
+        const seekTime =
+          Number(
+            details?.seekTime,
+          )
+
+        if (
+          Number.isFinite(
+            seekTime,
+          )
+        ) {
+          seekToRef.current?.(
+            seekTime,
+          )
+        }
+      },
+    )
+
+    return () => {
+      clearAction('play')
+      clearAction('pause')
+      clearAction('nexttrack')
+      clearAction('previoustrack')
+      clearAction('seekbackward')
+      clearAction('seekforward')
+      clearAction('seekto')
+    }
+  }, [
+    getCurrentPlaybackTime,
+  ])
+
+  /*
+   * ---------------------------------------------------------
+   * RETURN PLAYER API
+   * ---------------------------------------------------------
+   */
   return {
     currentTrack,
     queue,
@@ -1881,11 +2352,13 @@ export function useMusicPlayer(
     duration,
     isLoading,
     error,
+
     playTrack,
     togglePlay,
     seekTo,
     nextTrack,
     previousTrack,
+
     veromePlayerContainerRef,
   }
 }
