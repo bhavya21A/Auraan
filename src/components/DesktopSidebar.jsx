@@ -4,10 +4,8 @@ import {
   Library,
   Radio,
   Music2,
-  LogOut,
 } from 'lucide-react'
 
-import { supabase } from '../services/supabase'
 import logo from '../assets/logo.png'
 
 const navItems = [
@@ -17,78 +15,18 @@ const navItems = [
   { id: 'Library', icon: Library, label: 'Library' },
 ]
 
-function getInitial(name = '') {
-  const value = String(name).trim()
-
-  if (!value) {
-    return 'U'
-  }
-
-  return value.charAt(0).toUpperCase()
-}
-
 function DesktopSidebar({
   activeTab,
   onSelectTab,
   playlists = [],
   selectedPlaylist = null,
   onSelectPlaylist,
-  profileName = '',
-  user = null,
-  onSignOut,
 }) {
   const handlePlaylistClick = (playlist) => {
     if (!playlist?.id) return
 
     onSelectPlaylist?.(playlist)
   }
-
-  const handleSignOut = async () => {
-    console.log('1. SIDEBAR SIGN OUT CLICKED')
-
-    try {
-      if (typeof onSignOut === 'function') {
-        console.log('2. CALLING APP SIGN OUT HANDLER')
-
-        await onSignOut()
-
-        console.log('3. APP SIGN OUT HANDLER FINISHED')
-        return
-      }
-
-      console.log(
-        '2. APP SIGN OUT HANDLER NOT PROVIDED — USING SUPABASE FALLBACK',
-      )
-
-      const { error } = await supabase.auth.signOut()
-
-      console.log('3. SUPABASE SIGN OUT RESULT:', error)
-
-      if (error) {
-        console.error(
-          '4. SUPABASE SIGN OUT FAILED:',
-          error,
-        )
-        return
-      }
-
-      console.log('5. SUPABASE SIGN OUT SUCCESS')
-
-      window.location.reload()
-    } catch (error) {
-      console.error('SIGN OUT EXCEPTION:', error)
-    }
-  }
-
-  const displayName =
-    profileName ||
-    user?.user_metadata?.full_name ||
-    user?.user_metadata?.name ||
-    user?.user_metadata?.user_name ||
-    user?.email?.split('@')[0] ||
-    'User'
-
-  const accountEmail = user?.email || 'Signed in'
 
   return (
     <aside className="hidden min-h-screen w-[260px] border-r border-white/[0.06] bg-[#08090B] px-5 py-7 lg:flex lg:flex-col">
@@ -192,7 +130,8 @@ function DesktopSidebar({
                       className="h-full w-full object-cover"
                       loading="lazy"
                       onError={(event) => {
-                        event.currentTarget.style.display = 'none'
+                        event.currentTarget.style.display =
+                          'none'
                       }}
                     />
                   ) : null}
@@ -224,39 +163,9 @@ function DesktopSidebar({
           </p>
         </div>
       )}
-
-      {/* Account */}
-      <div className="relative z-50 mt-auto rounded-2xl border border-white/[0.07] bg-[#101114] p-3">
-        <div className="flex items-center gap-3">
-          {/* User avatar */}
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#7567F8]/20 bg-[#7567F8]/10 text-sm font-semibold text-[#A9A4FF]">
-            {getInitial(displayName)}
-          </div>
-
-          {/* User information */}
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-white">
-              {displayName}
-            </p>
-
-            <p className="truncate text-xs text-white/35">
-              {accountEmail}
-            </p>
-          </div>
-        </div>
-
-        {/* Sign out */}
-        <button
-          type="button"
-          onClick={handleSignOut}
-          className="relative z-50 mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-sm text-white/50 transition hover:border-red-400/20 hover:bg-red-400/[0.06] hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7567F8]/60"
-        >
-          <LogOut size={16} />
-          Sign out
-        </button>
-      </div>
     </aside>
   )
 }
 
 export default DesktopSidebar
+

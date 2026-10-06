@@ -125,3 +125,54 @@ input[type='range']::-moz-range-thumb {
   box-shadow: 0 0 0 4px rgba(244, 114, 182, 0.2);
 }
 
+/* AURAAN — neon gradient scrollbar */
+
+.made-for-you-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #b83cff #101114;
+}
+
+.made-for-you-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+
+.made-for-you-scroll::-webkit-scrollbar-track {
+  background: #101114;
+  border-radius: 999px;
+}
+
+.made-for-you-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    90deg,
+    #ff2bd6 0%,
+    #a52cff 50%,
+    #246bff 100%
+  );
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 0 8px rgba(255, 43, 214, 0.35),
+    0 0 12px rgba(36, 107, 255, 0.2);
+}
+
+.made-for-you-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    90deg,
+    #ff55df 0%,
+    #bd55ff 50%,
+    #4b8cff 100%
+  );
+  box-shadow:
+    0 0 10px rgba(255, 43, 214, 0.5),
+    0 0 16px rgba(36, 107, 255, 0.3);
+}
+
+.made-for-you-scroll::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(
+    90deg,
+    #ff20d0 0%,
+    #9c25ff 50%,
+    #185cff 100%
+  );
+}
+

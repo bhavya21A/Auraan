@@ -35,6 +35,12 @@ import QueuePanel from './components/QueuePanel'
 import LyricsSheet from './components/LyricsSheet'
 import ProgressBar from './components/ProgressBar'
 import Artwork from './components/Artwork'
+import MadeForYouSection from './components/discovery/MadeForYouSection'
+import BecauseYouListenedSection from './components/discovery/BecauseYouListenedSection'
+import FavoriteSongsSection from './components/discovery/FavoriteSongsSection'
+import RecentlyPlayedSection from './components/discovery/RecentlyPlayedSection'
+import DailyMixPage from './components/DailyMixPage'
+import MadeForYouCollectionPage from './components/discovery/MadeForYouCollectionPage'
 
 import { getAlbum, searchAlbums, searchMusic } from './services/musicApi'
 import { getVeromeArtist, searchVerome } from './services/veromeApi'
@@ -729,6 +735,8 @@ function App() {
   const [searchAlbum, setSearchAlbum] = useState(null)
   const [searchAlbumResults, setSearchAlbumResults] = useState([])
   const [selectedAlbum, setSelectedAlbum] = useState(null)
+  const [selectedDailyMix, setSelectedDailyMix] = useState(null)
+  const [selectedMadeForYouCollection, setSelectedMadeForYouCollection] = useState(null)
   const [selectedAlbumSongs, setSelectedAlbumSongs] = useState([])
   const [albumStatus, setAlbumStatus] = useState('idle')
   const [albumError, setAlbumError] = useState('')
@@ -1726,7 +1734,10 @@ function App() {
     // Reset navigation and music state.
     setActiveTab('Home')
     setSelectedPlaylist(null)
+    setSelectedDailyMix(null)
+    setSelectedMadeForYouCollection(null)
     setSelectedAlbum(null)
+    setSelectedDailyMix(null)
     setSelectedAlbumSongs([])
     setAlbumStatus('idle')
     setAlbumError('')
@@ -2609,6 +2620,14 @@ function App() {
    * Navigation
    */
   const handleSelectTab = (tab, payload = null) => {
+    if (tab !== 'DailyMix') {
+      setSelectedDailyMix(null)
+    }
+
+    if (tab !== 'MadeForYou') {
+      setSelectedMadeForYouCollection(null)
+    }
+
     if (tab === 'Playlist') {
       if (payload?.id) {
         setSelectedPlaylist(payload)
@@ -2636,6 +2655,47 @@ function App() {
 
     setSelectedPlaylist(freshPlaylist)
     setActiveTab('Playlist')
+    setShowSearchSheet(false)
+    setQueueOpen(false)
+  }
+
+  /*
+   * Open one Daily Mix as its own screen.
+   * Daily Mixes no longer expand inline on Home.
+   */
+  const openDailyMix = (mix) => {
+    if (!mix?.id) return
+
+    setSelectedDailyMix(mix)
+    setActiveTab('DailyMix')
+    setShowSearchSheet(false)
+    setQueueOpen(false)
+  }
+
+  const closeDailyMix = () => {
+    setSelectedDailyMix(null)
+    setActiveTab('Home')
+    setShowSearchSheet(false)
+    setQueueOpen(false)
+  }
+
+  /*
+   * Open one Made For You collection as its own screen.
+   * Favorites, Keep Listening, Fresh Picks, and For Your Mood
+   * use this path instead of expanding inline on Home.
+   */
+  const openMadeForYouCollection = (collection) => {
+    if (!collection?.id) return
+
+    setSelectedMadeForYouCollection(collection)
+    setActiveTab('MadeForYou')
+    setShowSearchSheet(false)
+    setQueueOpen(false)
+  }
+
+  const closeMadeForYouCollection = () => {
+    setSelectedMadeForYouCollection(null)
+    setActiveTab('Home')
     setShowSearchSheet(false)
     setQueueOpen(false)
   }
@@ -4190,115 +4250,88 @@ function App() {
    * HOME
    * =========================================================
    */
-  const renderHomeScreen = () => (
-    <div className="space-y-8 pb-28 lg:pb-10">
-      <section className="rounded-[24px] border border-white/[0.07] bg-[#101114] p-5 sm:p-7">
-        <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/40">
-          Your music
-        </p>
+ const renderHomeScreen = () => (
+  <div className="space-y-8 pb-28 lg:pb-10">
+    <section className="rounded-[24px] border border-white/[0.07] bg-[#101114] p-5 sm:p-7">
+      <p className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/40">
+        Your music
+      </p>
 
-        <h2 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
-          Welcome back
-        </h2>
+      <h2 className="mt-2 text-3xl font-semibold tracking-[-0.05em] text-white sm:text-4xl">
+        Welcome back
+      </h2>
 
-        <p className="mt-3 max-w-xl text-sm leading-6 text-white/50">
-          Search for music and build your personal
-          listening history as you go.
-        </p>
+      <p className="mt-3 max-w-xl text-sm leading-6 text-white/50">
+        Search for music and build your personal
+        listening history as you go.
+      </p>
 
-        <button
-          type="button"
-          onClick={handleOpenSearch}
-          className="mt-6 flex min-h-11 items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition hover:bg-white/90 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
-        >
-          <Search size={16} />
-          Search music
-        </button>
-      </section>
+      <button
+        type="button"
+        onClick={handleOpenSearch}
+        className="mt-6 flex min-h-11 items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-medium text-black transition hover:bg-white/90 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+      >
+        <Search size={16} />
+        Search music
+      </button>
+    </section>
 
-      <section className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <SectionHeader title="Recently played" />
+    <MadeForYouSection
+  username={profileName}
+  favorites={favorites}
+  recentlyPlayed={recentlyPlayed}
+  discoveryTracks={searchResults}
+  handleOpenPlayer={handleOpenPlayer}
+  handleSongMoreOptions={handleSongMoreOptions}
+  onOpenDailyMix={openDailyMix}
+  onOpenCollection={openMadeForYouCollection}
+  currentSong={currentSong}
+  playerLoading={playerLoading}
+  playerError={playerError}
+  isPlaying={isPlaying}
+  sameTrack={sameTrack}
+  favoriteProps={favoriteProps}
+/>
 
-          {recentlyPlayed.length ? (
-            <button
-              type="button"
-              onClick={() => {
-                clearRecentlyPlayed()
-                setRecentlyPlayed([])
-              }}
-              className="min-h-11 touch-manipulation px-2 text-xs uppercase tracking-[0.16em] text-white/45 transition hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
-            >
-              Clear
-            </button>
-          ) : null}
-        </div>
+    <BecauseYouListenedSection
+      recentlyPlayed={recentlyPlayed}
+      handleOpenPlayer={handleOpenPlayer}
+      handleSongMoreOptions={handleSongMoreOptions}
+      currentSong={currentSong}
+      playerLoading={playerLoading}
+      playerError={playerError}
+      isPlaying={isPlaying}
+      sameTrack={sameTrack}
+      favoriteProps={favoriteProps}
+    />
 
-        {recentlyPlayed.length ? (
-          <div className="space-y-2">
-            {recentlyPlayed
-              .slice(0, 10)
-              .map((song, index) => (
-                <SongRow
-                  key={`${song.provider}-${song.id}`}
-                  song={song}
-                  number={index + 1}
-                  onOpenPlayer={(track) =>
-                    handleOpenPlayer(track, [
-                      track,
-                    ])
-                  }
-                  onMoreOptions={
-                    handleSongMoreOptions
-                  }
-                  isActive={sameTrack(
-                    song,
-                    currentSong,
-                  )}
-                  isLoading={
-                    playerLoading &&
-                    sameTrack(
-                      song,
-                      currentSong,
-                    )
-                  }
-                  isPlaying={isPlaying}
-                  error={
-                    playerError &&
-                    sameTrack(
-                      song,
-                      currentSong,
-                    )
-                      ? playerError
-                      : ''
-                  }
-                  {...favoriteProps(song)}
-                />
-              ))}
-          </div>
-        ) : (
-          <div className="rounded-[24px] border border-dashed border-white/10 bg-white/[0.02] px-5 py-8 text-center">
-            <p className="text-sm font-medium text-white/75">
-              Nothing played yet.
-            </p>
+    <FavoriteSongsSection
+      favorites={favorites}
+      handleOpenPlayer={handleOpenPlayer}
+      handleSongMoreOptions={handleSongMoreOptions}
+      currentSong={currentSong}
+      playerLoading={playerLoading}
+      playerError={playerError}
+      isPlaying={isPlaying}
+      sameTrack={sameTrack}
+      favoriteProps={favoriteProps}
+    />
 
-            <p className="mt-2 text-xs leading-5 text-white/40">
-              Search for a song and start listening.
-              Your played tracks will appear here.
-            </p>
-
-            <button
-              type="button"
-              onClick={handleOpenSearch}
-              className="mt-5 min-h-11 rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm text-white/75 transition hover:bg-white/[0.08] active:scale-95"
-            >
-              Find music
-            </button>
-          </div>
-        )}
-      </section>
-    </div>
-  )
+    <RecentlyPlayedSection
+      recentlyPlayed={recentlyPlayed}
+      clearRecentlyPlayed={clearRecentlyPlayed}
+      handleOpenSearch={handleOpenSearch}
+      handleOpenPlayer={handleOpenPlayer}
+      handleSongMoreOptions={handleSongMoreOptions}
+      currentSong={currentSong}
+      playerLoading={playerLoading}
+      playerError={playerError}
+      isPlaying={isPlaying}
+      sameTrack={sameTrack}
+      favoriteProps={favoriteProps}
+    />
+  </div>
+)
 
   /*
    * =========================================================
@@ -6071,6 +6104,42 @@ function App() {
       return renderSelectedPlaylist()
     }
 
+    if (activeTab === 'DailyMix') {
+      return (
+        <DailyMixPage
+          mix={selectedDailyMix}
+          username={profileName}
+          onBack={closeDailyMix}
+          onOpenPlayer={handleOpenPlayer}
+          handleSongMoreOptions={handleSongMoreOptions}
+          currentSong={currentSong}
+          playerLoading={playerLoading}
+          playerError={playerError}
+          isPlaying={isPlaying}
+          sameTrack={sameTrack}
+          favoriteProps={favoriteProps}
+        />
+      )
+    }
+
+    if (activeTab === 'MadeForYou') {
+      return (
+        <MadeForYouCollectionPage
+          collection={selectedMadeForYouCollection}
+          username={profileName}
+          onBack={closeMadeForYouCollection}
+          onOpenPlayer={handleOpenPlayer}
+          handleSongMoreOptions={handleSongMoreOptions}
+          currentSong={currentSong}
+          playerLoading={playerLoading}
+          playerError={playerError}
+          isPlaying={isPlaying}
+          sameTrack={sameTrack}
+          favoriteProps={favoriteProps}
+        />
+      )
+    }
+
     if (activeTab === 'Album') {
       return renderSelectedAlbum()
     }
@@ -6116,20 +6185,24 @@ function App() {
               handleSelectTab(tab)
             }
           }}
-            playlists={playlists}
-            selectedPlaylist={selectedPlaylist}
-            onSelectPlaylist={openPlaylist}
-            profileName={profileName}
-            user={user}
-            onSignOut={handleSignOut}
+          playlists={playlists}
+          selectedPlaylist={selectedPlaylist}
+          onSelectPlaylist={openPlaylist}
         />
 
         <main className="auraan-main order-last relative min-w-0 flex-1 overflow-hidden bg-[#090a0c] lg:order-none">
           <TopBar
-            title={activeTab}
+            title={
+              activeTab === 'DailyMix'
+                ? selectedDailyMix?.title || 'Daily Mix'
+                : activeTab === 'MadeForYou'
+                  ? selectedMadeForYouCollection?.title || 'Made For You'
+                  : activeTab
+            }
             searchValue={searchText}
             onOpenSearch={handleOpenSearch}
             profileName={profileName}
+            onOpenProfile={() => handleSelectTab('Profile')}
           />
 
           <div className="tab-screen px-4 pb-32 pt-5 sm:px-6 lg:px-10">
