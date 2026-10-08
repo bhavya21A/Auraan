@@ -6,6 +6,7 @@ import {
   MoreHorizontal,
   Pause,
   Play,
+  ListMusic,
   ListPlus,
   Plus,
   UserRound,
@@ -265,6 +266,23 @@ function SongRow({
               event.stopPropagation()
             }
           >
+            {/* Add to queue */}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() =>
+                handleMenuAction('queue')
+              }
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-white/75 transition hover:bg-white/[0.07] hover:text-white"
+            >
+              <ListMusic
+                size={16}
+                className="text-white/45"
+              />
+              Add to queue
+            </button>
+
+            {/* Add to playlist */}
             <button
               type="button"
               role="menuitem"
@@ -280,6 +298,7 @@ function SongRow({
               Add to playlist
             </button>
 
+            {/* Create playlist */}
             <button
               type="button"
               role="menuitem"
@@ -299,6 +318,7 @@ function SongRow({
 
             <div className="my-1 border-t border-white/[0.06]" />
 
+            {/* View artist */}
             <button
               type="button"
               role="menuitem"
@@ -314,6 +334,7 @@ function SongRow({
               View artist
             </button>
 
+            {/* View album */}
             <button
               type="button"
               role="menuitem"

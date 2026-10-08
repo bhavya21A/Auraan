@@ -1,4 +1,12 @@
-import { Play, Pause, SkipBack, SkipForward, ListMusic } from 'lucide-react'
+import {
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  ListMusic,
+  Repeat,
+  Repeat1,
+} from 'lucide-react'
 import Artwork from './Artwork'
 
 function MiniPlayer({
@@ -8,18 +16,30 @@ function MiniPlayer({
   error = '',
   currentTime = 0,
   duration = 0,
+  repeatMode = 'off',
   onTogglePlay,
   onOpenPlayer,
   onPreviousTrack,
   onNextTrack,
   onOpenQueue,
+  onToggleRepeat,
 }) {
   if (!song) return null
 
   const progress =
     Number.isFinite(duration) && duration > 0
-      ? Math.min(Math.max((currentTime / duration) * 100, 0), 100)
+      ? Math.min(
+          Math.max((currentTime / duration) * 100, 0),
+          100,
+        )
       : 0
+
+  const repeatLabel =
+    repeatMode === 'one'
+      ? 'Repeat one'
+      : repeatMode === 'queue'
+        ? 'Repeat queue'
+        : 'Repeat off'
 
   return (
     <div className="fixed inset-x-0 bottom-[76px] z-30 px-3 pb-2 lg:bottom-4 lg:left-[280px] lg:right-4 lg:px-0">
@@ -80,12 +100,19 @@ function MiniPlayer({
               }}
               disabled={isLoading}
               className="flex h-11 w-11 touch-manipulation items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-orange-400 text-white shadow-glow transition active:scale-95 disabled:cursor-wait disabled:opacity-60"
-              aria-label={isPlaying ? 'Pause playback' : 'Play playback'}
+              aria-label={
+                isPlaying
+                  ? 'Pause playback'
+                  : 'Play playback'
+              }
             >
               {isLoading ? (
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
               ) : isPlaying ? (
-                <Pause size={16} fill="currentColor" />
+                <Pause
+                  size={16}
+                  fill="currentColor"
+                />
               ) : (
                 <Play
                   size={16}
@@ -107,6 +134,29 @@ function MiniPlayer({
               aria-label="Next track"
             >
               <SkipForward size={14} />
+            </button>
+
+            {/* Repeat */}
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggleRepeat?.()
+              }}
+              disabled={isLoading}
+              className={`flex h-10 w-10 touch-manipulation items-center justify-center rounded-full bg-white/8 transition active:scale-95 disabled:cursor-wait disabled:opacity-50 ${
+                repeatMode !== 'off'
+                  ? 'text-pink-400'
+                  : 'text-white'
+              }`}
+              aria-label={repeatLabel}
+              title={repeatLabel}
+            >
+              {repeatMode === 'one' ? (
+                <Repeat1 size={15} />
+              ) : (
+                <Repeat size={15} />
+              )}
             </button>
 
             {/* Queue */}

@@ -11,6 +11,16 @@ const STORAGE_KEY = 'music_player_state'
 const STORAGE_VERSION = 1
 
 const VEROME_PROVIDER = 'verome'
+const REPEAT_MODES = {
+  OFF: 'off',
+  QUEUE: 'queue',
+  ONE: 'one',
+}
+
+const isValidRepeatMode = (value) =>
+  value === REPEAT_MODES.OFF ||
+  value === REPEAT_MODES.QUEUE ||
+  value === REPEAT_MODES.ONE
 
 const YOUTUBE_IFRAME_API_SRC =
   'https://www.youtube.com/iframe_api'
@@ -112,6 +122,7 @@ const emptyState = () => ({
   track: null,
   queue: [],
   currentTime: 0,
+  repeatMode: REPEAT_MODES.OFF,
 })
 
 const readPersistedState = () => {
@@ -154,6 +165,9 @@ const readPersistedState = () => {
         Number(parsed.currentTime) >= 0
           ? Number(parsed.currentTime)
           : 0,
+      repeatMode: isValidRepeatMode(parsed.repeatMode)
+      ? parsed.repeatMode
+      : REPEAT_MODES.OFF,
     }
   } catch {
     return emptyState()
@@ -164,6 +178,7 @@ const persistState = (
   track,
   queue,
   currentTime,
+  repeatMode = REPEAT_MODES.OFF,
 ) => {
   const storage = getStorage()
 
@@ -191,6 +206,7 @@ const persistState = (
           Number(currentTime) >= 0
             ? Number(currentTime)
             : 0,
+        repeatMode,
       }),
     )
   } catch {
@@ -354,6 +370,15 @@ export function useMusicPlayer(
       initialRestoredQueue,
     )
 
+  const repeatModeRef =
+    useRef(
+      isValidRepeatMode(
+        restoredState.repeatMode,
+      )
+        ? restoredState.repeatMode
+        : REPEAT_MODES.OFF,
+    )
+
   const streamCacheRef =
     useRef(new Map())
 
@@ -414,6 +439,13 @@ export function useMusicPlayer(
   )
 
   const [
+    repeatMode,
+    setRepeatModeState,
+  ] = useState(
+    repeatModeRef.current,
+  )
+
+  const [
     duration,
     setDuration,
   ] = useState(
@@ -466,7 +498,7 @@ export function useMusicPlayer(
       }
 
       return (
-        Number(
+              Number(
           audioRef.current
             ?.currentTime,
         ) || 0
@@ -479,6 +511,7 @@ export function useMusicPlayer(
         currentTrackRef.current,
         queueRef.current,
         getCurrentPlaybackTime(),
+        repeatModeRef.current,
       )
     }, [
       getCurrentPlaybackTime,
@@ -631,6 +664,7 @@ export function useMusicPlayer(
 
             setCurrentTime(
               nextTime,
+              repeatModeRef.current,
             )
 
             if (
@@ -645,6 +679,7 @@ export function useMusicPlayer(
               currentTrackRef.current,
               queueRef.current,
               nextTime,
+              repeatModeRef.current,
             )
           } catch {
             // Ignore transition frames.
@@ -815,6 +850,7 @@ export function useMusicPlayer(
                                       currentTrackRef.current,
                                       queueRef.current,
                                       0,
+                                      repeatModeRef.current,
                                     )
 
                                     const track =
@@ -831,14 +867,27 @@ export function useMusicPlayer(
                                             track?.id,
                                       )
 
-                                    const next =
-                                      currentIndex >=
-                                      0
-                                        ? queueRef.current[
-                                            currentIndex +
-                                              1
-                                          ]
-                                        : null
+                                    let next = null
+
+                                    if (
+                                      repeatModeRef.current ===
+                                      REPEAT_MODES.ONE
+                                    ) {
+                                      next = track
+                                    } else if (
+                                      currentIndex >= 0
+                                    ) {
+                                      next =
+                                        queueRef.current[
+                                          currentIndex +
+                                            1
+                                        ] || (
+                                          repeatModeRef.current ===
+                                          REPEAT_MODES.QUEUE
+                                            ? queueRef.current[0]
+                                            : null
+                                        )
+                                    }
 
                                     if (
                                       next
@@ -846,6 +895,8 @@ export function useMusicPlayer(
                                       void startTrackRef.current?.(
                                         next,
                                         true,
+                                        repeatModeRef.current ===
+                                          REPEAT_MODES.ONE,
                                       )
                                     }
 
@@ -956,69 +1007,73 @@ export function useMusicPlayer(
         if (
           restorePosition >
             0 &&
-          currentTrackRef.current
+          restorePosition <
+            audio.duration
         ) {
-          const nextTime =
-            Math.min(
-              restorePosition,
-              audio.duration,
-            )
-
-          audio.currentTime =
-            nextTime
-
-          setCurrentTime(
-            nextTime,
-          )
-
-          restorePositionRef.current =
-            0
+          try {
+            audio.currentTime =
+              restorePosition
+          } catch {
+            // Ignore restore failures.
+          }
         }
 
-        updateMediaSession(
-          currentTrackRef.current,
-          !audio.paused,
-          audio.currentTime,
-          audio.duration,
-        )
+        restorePositionRef.current =
+          0
       }
 
     const handleTimeUpdate =
       () => {
+        const time =
+          Number(
+            audio.currentTime,
+          ) || 0
+
         setCurrentTime(
-          audio.currentTime,
+          time,
         )
 
         persistState(
           currentTrackRef.current,
           queueRef.current,
-          audio.currentTime,
+          time,
+          repeatModeRef.current,
         )
 
         updateMediaSession(
           currentTrackRef.current,
           !audio.paused,
-          audio.currentTime,
-          audio.duration,
+          time,
+          Number.isFinite(
+            audio.duration,
+          )
+            ? audio.duration
+            : duration,
         )
       }
 
-    const handlePlay = () => {
-      setIsLoading(
-        false,
-      )
+    const handlePlay =
+      () => {
+        setIsPlaying(
+          true,
+        )
 
-      setIsPlaying(
-        true,
-      )
+        setIsLoading(
+          false,
+        )
 
-      updateMediaSession(
-        currentTrackRef.current,
-        true,
-        audio.currentTime,
-        audio.duration,
-      )
-    }
+        updateMediaSession(
+          currentTrackRef.current,
+          true,
+          audio.currentTime ||
+            0,
+          Number.isFinite(
+            audio.duration,
+          )
+            ? audio.duration
+            : duration,
+        )
+      }
 
     const handlePause =
       () => {
@@ -1026,18 +1081,23 @@ export function useMusicPlayer(
           false,
         )
 
-        persistState(
-          currentTrackRef.current,
-          queueRef.current,
-          audio.currentTime,
+        setIsLoading(
+          false,
         )
 
         updateMediaSession(
           currentTrackRef.current,
           false,
-          audio.currentTime,
-          audio.duration,
+          audio.currentTime ||
+            0,
+          Number.isFinite(
+            audio.duration,
+          )
+            ? audio.duration
+            : duration,
         )
+
+        persistCurrentPlayback()
       }
 
     const handleWaiting =
@@ -1056,113 +1116,117 @@ export function useMusicPlayer(
 
     const handleEnded =
       () => {
-        setIsPlaying(
-          false,
-        )
+        const repeatMode =
+          repeatModeRef.current
 
-        setIsLoading(
-          false,
-        )
+        if (
+          repeatMode ===
+          REPEAT_MODES.ONE
+        ) {
+          try {
+            audio.currentTime =
+              0
+          } catch {
+            // Ignore restart seek errors.
+          }
 
-        setCurrentTime(
-          0,
-        )
+          void audio
+            .play()
+            .catch(
+              () => {
+                setIsPlaying(
+                  false,
+                )
+              },
+            )
 
-        audio.currentTime =
-          0
-
-        persistState(
-          currentTrackRef.current,
-          queueRef.current,
-          0,
-        )
-
-        updateMediaSession(
-          currentTrackRef.current,
-          false,
-          0,
-          audio.duration,
-        )
+          return
+        }
 
         const track =
           currentTrackRef.current
 
         const currentIndex =
           queueRef.current.findIndex(
-            (item) =>
+            (
+              item,
+            ) =>
               item.provider ===
                 track?.provider &&
               item.id ===
                 track?.id,
           )
 
-        const next =
+        let next = null
+
+        if (
           currentIndex >=
           0
-            ? queueRef.current[
-                currentIndex +
-                  1
-              ]
-            : null
+        ) {
+          next =
+            queueRef.current[
+              currentIndex +
+                1
+            ] || null
+        }
 
-        if (next) {
+        if (
+          !next &&
+          repeatMode ===
+            REPEAT_MODES.QUEUE &&
+          queueRef.current.length
+        ) {
+          next =
+            queueRef.current[0]
+        }
+
+        if (
+          next
+        ) {
           void startTrackRef.current?.(
             next,
             true,
-          )
-        }
-      }
-
-    const handleError =
-      () => {
-        const track =
-          currentTrackRef.current
-
-        const cacheKey =
-          track
-            ? `${track.provider}:${track.id}`
-            : null
-
-        if (
-          track &&
-          cacheKey &&
-          streamCacheRef.current.has(
-            cacheKey,
-          ) &&
-          !retryKeysRef.current.has(
-            cacheKey,
-          )
-        ) {
-          retryKeysRef.current.add(
-            cacheKey,
-          )
-
-          streamCacheRef.current.delete(
-            cacheKey,
-          )
-
-          void startTrackRef.current?.(
-            track,
-            true,
-            true,
+            false,
           )
 
           return
         }
 
+        setCurrentTime(
+          0,
+        )
+
         setIsPlaying(
           false,
         )
 
-        setIsLoading(
-          false,
+        persistState(
+          currentTrackRef.current,
+          queueRef.current,
+          0,
+          repeatModeRef.current,
         )
 
         updateMediaSession(
           currentTrackRef.current,
           false,
-          audio.currentTime,
-          audio.duration,
+          0,
+          Number.isFinite(
+            audio.duration,
+          )
+            ? audio.duration
+            : duration,
+        )
+      }
+
+    const handleError =
+      () => {
+        setIsLoading(
+          false,
+        )
+
+        setIsPlaying(
+          false,
         )
 
         setError(
@@ -1210,52 +1274,7 @@ export function useMusicPlayer(
       handleError,
     )
 
-    if (
-      initialRestoredTrack
-    ) {
-      persistState(
-        initialRestoredTrack,
-        initialRestoredQueue,
-        restoredState.currentTime,
-      )
-    }
-
     return () => {
-      persistState(
-        currentTrackRef.current,
-        queueRef.current,
-        getCurrentPlaybackTime(),
-      )
-
-      stopVeromeProgress()
-
-      try {
-        veromePlayerRef.current?.pauseVideo?.()
-        veromePlayerRef.current?.destroy?.()
-      } catch {
-        // Ignore cleanup failures.
-      }
-
-      veromePlayerRef.current =
-        null
-
-      veromePlayerKeyRef.current =
-        null
-
-      veromeReadyPromiseRef.current =
-        null
-
-      audio.pause()
-
-      audio.removeAttribute(
-        'src',
-      )
-
-      audio.load()
-
-      audioRef.current =
-        null
-
       audio.removeEventListener(
         'loadedmetadata',
         handleLoadedMetadata,
@@ -1296,28 +1315,21 @@ export function useMusicPlayer(
         handleError,
       )
 
-      if (
-        typeof navigator !==
-          'undefined' &&
-        'mediaSession' in navigator
-      ) {
-        try {
-          navigator.mediaSession.metadata =
-            null
+      audio.pause()
 
-          navigator.mediaSession.playbackState =
-            'none'
-        } catch {
-          // Ignore cleanup failures.
-        }
+      audio.src = ''
+
+      if (
+        audioRef.current ===
+        audio
+      ) {
+        audioRef.current =
+          null
       }
     }
   }, [
-    getCurrentPlaybackTime,
-    initialRestoredQueue,
-    initialRestoredTrack,
-    restoredState.currentTime,
-    stopVeromeProgress,
+    duration,
+    persistCurrentPlayback,
     updateMediaSession,
   ])
 
@@ -1430,6 +1442,7 @@ export function useMusicPlayer(
               track,
               queueRef.current,
               0,
+              repeatModeRef.current,
             )
           } else {
             setCurrentTime(
@@ -1595,7 +1608,7 @@ export function useMusicPlayer(
         )
 
         if (
-          !isRestoringSameTrack
+                    !isRestoringSameTrack
         ) {
           restorePositionRef.current =
             0
@@ -1604,6 +1617,7 @@ export function useMusicPlayer(
             track,
             queueRef.current,
             0,
+            repeatModeRef.current,
           )
         }
 
@@ -1785,6 +1799,7 @@ export function useMusicPlayer(
         track,
         uniqueTracks,
         0,
+        repeatModeRef.current,
       )
 
       await startTrack(
@@ -1936,34 +1951,76 @@ export function useMusicPlayer(
         return
       }
 
-      stopVeromeProgress()
+      if (
+        repeatModeRef.current ===
+        REPEAT_MODES.QUEUE &&
+        queueRef.current.length >
+          0
+      ) {
+        await startTrack(
+          queueRef.current[0],
+          true,
+        )
 
-      try {
-        veromePlayerRef.current?.pauseVideo?.()
-      } catch {
-        // Ignore player transition errors.
+        return
       }
 
-      audioRef.current?.pause()
+      stopPlayback()
+    }
+
+  /*
+   * ---------------------------------------------------------
+   * PREVIOUS TRACK
+   * ---------------------------------------------------------
+   */
+  const previousTrack =
+    async () => {
+      const track =
+        currentTrackRef.current
+
+      if (!track) {
+        return
+      }
+
+      const currentTime =
+        getCurrentPlaybackTime()
 
       if (
-        audioRef.current
+        currentTime >
+        3
       ) {
-        audioRef.current.currentTime =
-          0
+        seek(
+          0,
+        )
+
+        return
       }
 
-      setCurrentTime(
-        0,
-      )
+      const currentIndex =
+        queueRef.current.findIndex(
+          (item) =>
+            item.provider ===
+              track.provider &&
+            item.id ===
+              track.id,
+        )
 
-      setIsPlaying(
-        false,
-      )
+      if (
+        currentIndex >
+        0
+      ) {
+        await startTrack(
+          queueRef.current[
+            currentIndex -
+              1
+          ],
+          true,
+        )
 
-      persistState(
-        currentTrackRef.current,
-        queueRef.current,
+        return
+      }
+
+      seek(
         0,
       )
     }
@@ -1974,225 +2031,330 @@ export function useMusicPlayer(
    * ---------------------------------------------------------
    */
   const seekTo =
-    useCallback(
-      (value) => {
-        const nextTime =
-          Number(value)
+    (value) => {
+      const nextTime =
+        Number(
+          value,
+        )
+
+      if (
+        !Number.isFinite(
+          nextTime,
+        )
+      ) {
+        return
+      }
+
+      const track =
+        currentTrackRef.current
+
+      if (
+        isVeromeTrack(
+          track,
+        )
+      ) {
+        const player =
+          veromePlayerRef.current
 
         if (
-          !Number.isFinite(
-            nextTime,
-          ) ||
-          nextTime <
-            0
+          player
         ) {
-          return
-        }
-
-        if (
-          isVeromeTrack(
-            currentTrackRef.current,
-          )
-        ) {
-          const player =
-            veromePlayerRef.current
-
-          if (!player) {
-            return
-          }
-
-          const playerDuration =
-            Number(
-              player.getDuration(),
-            ) ||
-            duration
-
-          if (
-            !Number.isFinite(
-              playerDuration,
-            ) ||
-            playerDuration <=
-              0
-          ) {
-            return
-          }
-
-          const clampedTime =
-            Math.min(
-              Math.max(
-                nextTime,
-                0,
-              ),
-              playerDuration,
-            )
-
           try {
             player.seekTo(
-              clampedTime,
+              nextTime,
               true,
             )
-
-            setCurrentTime(
-              clampedTime,
-            )
-
-            persistState(
-              currentTrackRef.current,
-              queueRef.current,
-              clampedTime,
-            )
           } catch {
-            // Ignore during transitions.
+            // Ignore seek failures.
           }
-
-          return
         }
-
-        const audio =
-          audioRef.current
-
-        const targetDuration =
-          Number.isFinite(
-            audio?.duration,
-          ) &&
-          audio.duration >
-            0
-            ? audio.duration
-            : duration
-
-        if (
-          !audio ||
-          !Number.isFinite(
-            targetDuration,
-          ) ||
-          targetDuration <=
-            0
-        ) {
-          return
-        }
-
-        audio.currentTime =
-          Math.min(
-            Math.max(
-              nextTime,
-              0,
-            ),
-            targetDuration,
-          )
 
         setCurrentTime(
-          audio.currentTime,
+          nextTime,
+        )
+
+        return
+      }
+
+      const audio =
+        audioRef.current
+
+      if (
+        audio
+      ) {
+        try {
+          audio.currentTime =
+            Math.max(
+              0,
+              Math.min(
+                nextTime,
+                Number.isFinite(
+                  audio.duration,
+                )
+                  ? audio.duration
+                  : nextTime,
+              ),
+            )
+        } catch {
+          // Ignore seek failures.
+        }
+      }
+
+      setCurrentTime(
+        nextTime,
+      )
+    }
+
+      /*
+   * ---------------------------------------------------------
+   * REPEAT
+   * ---------------------------------------------------------
+   */
+  const setRepeatMode =
+    useCallback(
+      (mode) => {
+        if (!isValidRepeatMode(mode)) {
+          return
+        }
+
+        repeatModeRef.current =
+          mode
+
+        setRepeatModeState(
+          mode,
         )
 
         persistState(
           currentTrackRef.current,
           queueRef.current,
-          audio.currentTime,
+          getCurrentPlaybackTime(),
+          mode,
         )
-
-        updateMediaSession(
-          currentTrackRef.current,
-          !audio.paused,
-          audio.currentTime,
-          targetDuration,
-        )
-      },
-      [
-        duration,
-        updateMediaSession,
-      ],
-    )
-
-  /*
-   * ---------------------------------------------------------
-   * PREVIOUS TRACK
-   * ---------------------------------------------------------
-   */
-  const previousTrack =
-    useCallback(
-      async () => {
-        const currentPosition =
-          getCurrentPlaybackTime()
-
-        if (
-          currentPosition >
-          3
-        ) {
-          seekTo(0)
-
-          return
-        }
-
-        const track =
-          currentTrackRef.current
-
-        const currentIndex =
-          queueRef.current.findIndex(
-            (item) =>
-              item.provider ===
-                track?.provider &&
-              item.id ===
-                track?.id,
-          )
-
-        const previous =
-          currentIndex >
-          0
-            ? queueRef.current[
-                currentIndex -
-                  1
-              ]
-            : null
-
-        if (
-          previous
-        ) {
-          await startTrack(
-            previous,
-            true,
-          )
-
-          return
-        }
-
-        seekTo(0)
       },
       [
         getCurrentPlaybackTime,
-        seekTo,
-        startTrack,
       ],
     )
 
+  const toggleRepeat =
+    useCallback(() => {
+      const current =
+        repeatModeRef.current
+
+      const next =
+        current === REPEAT_MODES.OFF
+          ? REPEAT_MODES.QUEUE
+          : current === REPEAT_MODES.QUEUE
+            ? REPEAT_MODES.ONE
+            : REPEAT_MODES.OFF
+
+      setRepeatMode(next)
+    }, [
+      setRepeatMode,
+    ])
   /*
    * ---------------------------------------------------------
-   * KEEP MEDIA SESSION HANDLERS CONNECTED
+   * STOP PLAYBACK
    * ---------------------------------------------------------
    */
-  useEffect(() => {
-    togglePlayRef.current =
-      togglePlay
-  })
+  const stopPlayback =
+    () => {
+      requestIdRef.current +=
+        1
 
-  useEffect(() => {
-    nextTrackRef.current =
-      nextTrack
-  })
+      const audio =
+        audioRef.current
 
-  useEffect(() => {
-    previousTrackRef.current =
-      previousTrack
-  })
+      if (audio) {
+        audio.pause()
 
-  useEffect(() => {
-    seekToRef.current =
-      seekTo
-  }, [
-    seekTo,
-  ])
+        try {
+          audio.currentTime =
+            0
+        } catch {
+          // Ignore reset failures.
+        }
+      }
+
+      const player =
+        veromePlayerRef.current
+
+      if (player) {
+        try {
+          player.pauseVideo()
+          player.seekTo(
+            0,
+            true,
+          )
+        } catch {
+          // Ignore player reset failures.
+        }
+      }
+
+      stopVeromeProgress()
+
+      setIsPlaying(
+        false,
+      )
+
+      setIsLoading(
+        false,
+      )
+
+      setCurrentTime(
+        0,
+      )
+
+      updateMediaSession(
+        currentTrackRef.current,
+        false,
+        0,
+        duration,
+      )
+    }
 
   /*
    * ---------------------------------------------------------
+   * QUEUE MANAGEMENT
+   * ---------------------------------------------------------
+   */
+  const addToQueue =
+    (track) => {
+      if (!isRealTrack(track)) {
+        return
+      }
+
+      const exists =
+        queueRef.current.some(
+          (item) =>
+            item.provider ===
+              track.provider &&
+            item.id ===
+              track.id,
+        )
+
+      if (exists) {
+        return
+      }
+
+      const nextQueue = [
+        ...queueRef.current,
+        track,
+      ]
+
+      queueRef.current =
+        nextQueue
+
+      setQueue(
+        nextQueue,
+      )
+
+      persistState(
+        currentTrackRef.current,
+        nextQueue,
+        getCurrentPlaybackTime(),
+        repeatModeRef.current,
+      )
+    }
+
+  const removeFromQueue =
+    (track) => {
+      if (!isRealTrack(track)) {
+        return
+      }
+
+      const nextQueue =
+        queueRef.current.filter(
+          (item) =>
+            !(
+              item.provider ===
+                track.provider &&
+              item.id ===
+                track.id
+            ),
+        )
+
+      queueRef.current =
+        nextQueue
+
+      setQueue(
+        nextQueue,
+      )
+
+      persistState(
+        currentTrackRef.current,
+        nextQueue,
+        getCurrentPlaybackTime(),
+        repeatModeRef.current,
+      )
+    }
+  
+    const reorderQueue =
+    (fromIndex, toIndex) => {
+      const currentQueue =
+        queueRef.current
+
+      if (
+        !Number.isInteger(fromIndex) ||
+        !Number.isInteger(toIndex) ||
+        fromIndex < 0 ||
+        fromIndex >= currentQueue.length ||
+        toIndex < 0 ||
+        toIndex >= currentQueue.length ||
+        fromIndex === toIndex
+      ) {
+        return
+      }
+
+      const nextQueue = [
+        ...currentQueue,
+      ]
+
+      const [
+        movedTrack,
+      ] = nextQueue.splice(
+        fromIndex,
+        1,
+      )
+
+      nextQueue.splice(
+        toIndex,
+        0,
+        movedTrack,
+      )
+
+      queueRef.current =
+        nextQueue
+
+      setQueue(
+        nextQueue,
+      )
+
+      persistState(
+        currentTrackRef.current,
+        nextQueue,
+        getCurrentPlaybackTime(),
+        repeatModeRef.current,
+      )
+    }
+
+  const clearQueue =
+    () => {
+      queueRef.current =
+        []
+
+      setQueue(
+        [],
+      )
+
+      persistState(
+        currentTrackRef.current,
+        [],
+        getCurrentPlaybackTime(),
+        repeatModeRef.current,
+      )
+    }
+  /* ---------------------------------------------------------
    * REGISTER MEDIA NOTIFICATION CONTROLS
    * ---------------------------------------------------------
    */
@@ -2352,12 +2514,21 @@ export function useMusicPlayer(
     duration,
     isLoading,
     error,
+    repeatMode,
 
     playTrack,
     togglePlay,
     seekTo,
     nextTrack,
     previousTrack,
+    setRepeatMode,
+    toggleRepeat,
+
+    addToQueue,
+    removeFromQueue,
+    reorderQueue,
+    clearQueue,
+
 
     veromePlayerContainerRef,
   }

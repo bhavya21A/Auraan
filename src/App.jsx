@@ -17,6 +17,7 @@ import {
   Plus,
   PictureInPicture,
   Repeat,
+  Repeat1,
   Search,
   Shuffle,
   SkipBack,
@@ -720,7 +721,6 @@ function App() {
   const [selectedPlaylist, setSelectedPlaylist] = useState(null)
 
   const [isShuffle, setIsShuffle] = useState(false)
-  const [isRepeat, setIsRepeat] = useState(false)
 
   const [isQueueOpen, setQueueOpen] = useState(false)
   const [isLyricsOpen, setIsLyricsOpen] = useState(false)
@@ -829,21 +829,26 @@ function App() {
     setIsSearchHistoryOpen(Boolean(history.length))
   }, [user?.id])
 
-  const {
-    currentTrack: playingTrack,
-    queue: playerQueue,
-    isPlaying,
-    currentTime,
-    duration: playerDuration,
-    isLoading: playerLoading,
-    error: playerError,
-    playTrack,
-    togglePlay,
-    seekTo,
-    nextTrack: nextPlayerTrack,
-    previousTrack: previousPlayerTrack,
-    veromePlayerContainerRef,
-  } = useMusicPlayer()
+    const {
+  currentTrack: playingTrack,
+  queue: playerQueue,
+  isPlaying,
+  currentTime,
+  duration: playerDuration,
+  isLoading: playerLoading,
+  error: playerError,
+  repeatMode,
+  toggleRepeat,
+  playTrack,
+  addToQueue,
+  reorderQueue,
+  removeFromQueue,
+  togglePlay,
+  seekTo,
+  nextTrack: nextPlayerTrack,
+  previousTrack: previousPlayerTrack,
+  veromePlayerContainerRef,
+} = useMusicPlayer()
 
   const currentSong =
     playingTrack || recentlyPlayed[0] || null
@@ -2488,7 +2493,7 @@ function App() {
   const handleOpenPlayer = (
   song,
   playbackQueue = searchResults,
-  replaceQueue = false,
+  replaceQueue = true,
 ) => {
   if (!song) return
 
@@ -3522,49 +3527,70 @@ function App() {
    * Open playlist UI from SongRow.
    */
   const handleSongMoreOptions = (
-    action,
-    song,
-  ) => {
-    if (!song) return
+  action,
+  song,
+) => {
+  if (!song) return
 
-    if (action === 'create-playlist') {
-      setPlaylistName('')
-      setPlaylistError('')
+  if (action === 'create-playlist') {
+    setPlaylistName('')
+    setPlaylistError('')
 
-      setPlaylistModal({
-        open: true,
-        mode: 'create',
-        song,
-      })
+    setPlaylistModal({
+      open: true,
+      mode: 'create',
+      song,
+    })
 
-      return
-    }
-
-    if (action === 'playlist') {
-      setPlaylistError('')
-
-      setPlaylistModal({
-        open: true,
-        mode: 'add',
-        song,
-      })
-
-      return
-    }
-
-    /*
-     * Artist / album navigation can be connected
-     * to dedicated pages later.
-     */
-    if (action === 'artist') {
-      console.log('View artist:', song.artist)
-      return
-    }
-
-    if (action === 'album') {
-      console.log('View album:', song.album)
-    }
+    return
   }
+
+  if (action === 'playlist') {
+    setPlaylistError('')
+
+    setPlaylistModal({
+      open: true,
+      mode: 'add',
+      song,
+    })
+
+    return
+  }
+    if (action === 'queue') {
+    const added = addToQueue(song)
+
+    if (!added) {
+      console.log(
+        'AURAAN: song is already in the queue',
+      )
+    }
+
+    return
+  }
+
+  if (action === 'queue') {
+    const added = addToQueue(song)
+
+    if (!added) {
+      console.log('AURAAN: song is already in the queue')
+    }
+
+    return
+  }
+
+  /*
+   * Artist / album navigation can be connected
+   * to dedicated pages later.
+   */
+  if (action === 'artist') {
+    console.log('View artist:', song.artist)
+    return
+  }
+
+  if (action === 'album') {
+    console.log('View album:', song.album)
+  }
+}
 
   /*
    * Close playlist modal.
@@ -5465,19 +5491,32 @@ function App() {
 
               <button
                 type="button"
-                onClick={() =>
-                  setIsRepeat(
-                    (value) => !value,
-                  )
-                }
+                onClick={toggleRepeat}
                 className={`flex h-11 w-11 items-center justify-center rounded-full border border-white/10 transition active:scale-95 ${
-                  isRepeat
+                  repeatMode !== 'off'
                     ? 'bg-white/10 text-white'
                     : 'bg-white/[0.025] text-white/40 hover:text-white/75'
                 }`}
-                aria-label="Toggle repeat"
+                aria-label={
+                  repeatMode === 'one'
+                    ? 'Repeat one'
+                    : repeatMode === 'queue'
+                      ? 'Repeat queue'
+                      : 'Repeat off'
+                }
+                title={
+                  repeatMode === 'one'
+                    ? 'Repeat one'
+                    : repeatMode === 'queue'
+                      ? 'Repeat queue'
+                      : 'Repeat off'
+                }
               >
-                <Repeat size={18} />
+                {repeatMode === 'one' ? (
+                  <Repeat1 size={18} />
+                ) : (
+                  <Repeat size={18} />
+                )}
               </button>
             </div>
 
@@ -5551,16 +5590,19 @@ function App() {
 
         {activeQueue.length ? (
           <div className="mt-5 hidden lg:block">
-            <QueuePanel
-              queue={activeQueue}
-              currentSong={currentSong}
-              onSelectTrack={(track) => {
-                handleOpenPlayer(
-                  track,
-                  activeQueue,
-                )
-              }}
-            />
+          <QueuePanel
+            queue={playerQueue}
+            currentSong={currentSong}
+            onSelectTrack={(track) => {
+              handleOpenPlayer(
+                track,
+                playerQueue,
+                true,
+              )
+            }}
+            onReorderQueue={reorderQueue}
+            onRemoveFromQueue={removeFromQueue}
+          />
           </div>
         ) : null}
       </div>
@@ -6379,21 +6421,24 @@ function App() {
         : null}
 
       <QueueSheet
-        isOpen={isQueueOpen}
-        onClose={() =>
-          setQueueOpen(false)
-        }
-        queue={playerQueue}
-        currentSong={currentSong}
-        onSelectTrack={(track) => {
-          setQueueOpen(false)
+  isOpen={isQueueOpen}
+  onClose={() =>
+    setQueueOpen(false)
+  }
+  queue={playerQueue}
+  currentSong={currentSong}
+  onSelectTrack={(track) => {
+    setQueueOpen(false)
 
-          handleOpenPlayer(
-            track,
-            playerQueue,
-          )
-        }}
-      />
+    handleOpenPlayer(
+      track,
+      playerQueue,
+      true,
+    )
+  }}
+  onReorderQueue={reorderQueue}
+  onRemoveFromQueue={removeFromQueue}
+/>
 
       <LyricsSheet
         isOpen={isLyricsOpen}
@@ -6413,29 +6458,31 @@ function App() {
       activeTab !== 'Player' &&
       currentSong ? (
         <MiniPlayer
-          song={currentSong}
-          isPlaying={isPlaying}
-          isLoading={playerLoading}
-          error={
-            playerError
-              ? 'Unable to play this track. Tap play to retry.'
-              : ''
-          }
-          currentTime={currentTime}
-          duration={
-            playerDuration ||
-            currentSong.durationSeconds
-          }
-          onTogglePlay={togglePlay}
-          onOpenPlayer={() =>
-            setActiveTab('Player')
-          }
-          onPreviousTrack={prevTrack}
-          onNextTrack={nextTrack}
-          onOpenQueue={() =>
-            setQueueOpen(true)
-          }
-        />
+  song={currentSong}
+  isPlaying={isPlaying}
+  isLoading={playerLoading}
+  error={
+    playerError
+      ? 'Unable to play this track. Tap play to retry.'
+      : ''
+  }
+  currentTime={currentTime}
+  duration={
+    playerDuration ||
+    currentSong.durationSeconds
+  }
+  repeatMode={repeatMode}
+  onToggleRepeat={toggleRepeat}
+  onTogglePlay={togglePlay}
+  onOpenPlayer={() =>
+    setActiveTab('Player')
+  }
+  onPreviousTrack={prevTrack}
+  onNextTrack={nextTrack}
+  onOpenQueue={() =>
+    setQueueOpen(true)
+  }
+/>
       ) : null}
 
       {floatingPlayerRoot
@@ -6561,15 +6608,31 @@ function App() {
                     <button
                       type="button"
                       className={`auraan-icon ${
-                        isRepeat ? 'auraan-fav-active' : ''
+                        repeatMode !== 'off'
+                          ? 'auraan-fav-active'
+                          : ''
                       }`}
-                      onClick={() =>
-                        setIsRepeat((value) => !value)
+                      onClick={toggleRepeat}
+                      aria-label={
+                        repeatMode === 'one'
+                          ? 'Repeat one'
+                          : repeatMode === 'queue'
+                            ? 'Repeat queue'
+                            : 'Repeat off'
                       }
-                      aria-label="Toggle repeat"
-                      title="Repeat"
+                      title={
+                        repeatMode === 'one'
+                          ? 'Repeat one'
+                          : repeatMode === 'queue'
+                            ? 'Repeat queue'
+                            : 'Repeat off'
+                      }
                     >
-                      <Repeat size={15} />
+                      {repeatMode === 'one' ? (
+                        <Repeat1 size={15} />
+                      ) : (
+                        <Repeat size={15} />
+                      )}
                     </button>
                   </div>
 
