@@ -454,6 +454,11 @@ export function useMusicPlayer(
         initialRestoredTrack?.duration,
     ),
   )
+  const durationRef = useRef(duration)
+
+ useEffect(() => {
+  durationRef.current = duration
+}, [duration])
 
   const [
     isLoading,
@@ -1048,7 +1053,7 @@ export function useMusicPlayer(
             audio.duration,
           )
             ? audio.duration
-            : duration,
+            : durationRef.current,
         )
       }
 
@@ -1071,7 +1076,7 @@ export function useMusicPlayer(
             audio.duration,
           )
             ? audio.duration
-            : duration,
+            : durationRef.current,
         )
       }
 
@@ -1094,7 +1099,7 @@ export function useMusicPlayer(
             audio.duration,
           )
             ? audio.duration
-            : duration,
+            : durationRef.current,
         )
 
         persistCurrentPlayback()
@@ -1215,7 +1220,7 @@ export function useMusicPlayer(
             audio.duration,
           )
             ? audio.duration
-            : duration,
+            : durationRef.current,
         )
       }
 
@@ -1328,10 +1333,9 @@ export function useMusicPlayer(
       }
     }
   }, [
-    duration,
-    persistCurrentPlayback,
-    updateMediaSession,
-  ])
+  persistCurrentPlayback,
+  updateMediaSession,
+])
 
   /*
    * ---------------------------------------------------------
